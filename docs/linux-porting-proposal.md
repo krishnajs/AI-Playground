@@ -2,6 +2,7 @@
 
 **Target Platform:** Ubuntu 24.04 LTS (Noble Numbat) and higher  
 **Target Hardware:** Intel Core Ultra 3 (Panther Lake) — CPU, integrated GPU (Xe3), discrete GPU (Intel Arc), NPU 5  
+**Target Kernel:** Linux 6.17 with Intel NPU and GPU SR-IOV drivers  
 **Date:** April 2026  
 **Status:** Draft Proposal
 
@@ -26,13 +27,24 @@ Intel AI Playground is an Electron + Vue.js desktop application that runs AI inf
 
 The codebase already contains partial Linux support — the Electron shell, AI Backend (Flask), and LlamaCPP backend work on Ubuntu x64 in development mode. However, **GPU-accelerated inference, hardware detection, OpenVINO backend, ComfyUI backend, NPU support, and packaging are all non-functional on Linux**.
 
-This document identifies every technical gap, proposes a phased implementation plan, and covers the Intel driver/runtime stack required for full CPU + GPU + NPU support on Ubuntu 24.04+.
+This document identifies every technical gap, proposes a phased implementation plan, and covers the Intel driver/runtime stack required for full CPU + GPU + NPU support on Ubuntu 24.04+ with kernel 6.17.
 
 The primary target hardware is **Intel Core Ultra 3 (Panther Lake)**, which integrates:
 - **CPU:** P-cores + E-cores (Intel Thread Director)
 - **iGPU:** Xe3-LPG integrated graphics with enhanced AI acceleration
 - **NPU 5:** Next-gen Neural Processing Unit with significantly improved TOPS
 - **Discrete GPU support:** Intel Arc (Battlemage / Alchemist) via PCIe
+- **GPU SR-IOV:** Single Root I/O Virtualization for GPU partitioning and sharing across workloads
+
+### Target Kernel: Linux 6.17
+
+Kernel 6.17 provides **full upstream support** for all Panther Lake IP blocks:
+- **Xe3-LPG iGPU:** i915/Xe kernel mode driver with full compute and display support
+- **NPU 5:** IVPU driver with full Panther Lake NPU device ID support
+- **GPU SR-IOV:** Virtual Function (VF) support for Intel GPUs, enabling hardware-level GPU partitioning
+- **NPU driver:** Fully functional `intel_vpu` kernel module
+
+With kernel 6.17, there are **no kernel version blockers** — all hardware features are natively supported.
 
 ### Target Hardware Architecture
 
@@ -183,13 +195,13 @@ block-beta
 
 **Panther Lake NPU 5 Considerations:**
 - Panther Lake ships with **NPU 5**, a significant upgrade over previous NPU generations with ~40+ TOPS.
-- The `intel-npu-driver` package must support the Panther Lake NPU device ID. Newer kernels (6.12+) are expected to have upstream i915/Xe and IVPU driver support for Panther Lake.
+- The `intel-npu-driver` package must support the Panther Lake NPU device ID. Kernel 6.17 has full upstream i915/Xe and IVPU driver support for Panther Lake.
 - OpenVINO 2025.x+ is expected to have full NPU 5 support on Linux.
 - The `intel-driver-compiler-npu` and `intel-fw-npu` packages must be version-matched for Panther Lake.
 
 **Linux Requirements:**
 - Intel NPU driver for Linux (`intel-npu-driver`) — ensure Panther Lake device IDs are supported.
-- Kernel 6.10+ recommended for full Panther Lake NPU 5 support (Ubuntu 24.04 HWE kernel or 24.10+).
+- Kernel 6.17 is confirmed — full Panther Lake NPU 5 support is available natively.
 - OpenVINO 2025.x+ supports NPU 5 on Linux natively.
 - Once the OpenVINO backend gap is resolved, NPU detection should work out-of-the-box via the same Python-based device enumeration.
 
@@ -197,6 +209,7 @@ block-beta
 - Confirm OVMS Linux binary supports NPU 5 device pass-through on Panther Lake
 - If OVMS doesn't support NPU 5, consider using OpenVINO GenAI directly for NPU inference
 - Validate NPU 5 performance uplift vs Meteor Lake/Arrow Lake NPU on Linux
+- Test GPU SR-IOV VF pass-through to OVMS for multi-tenant GPU inference
 
 ---
 
@@ -238,11 +251,11 @@ Unlike Windows where drivers auto-install, Linux requires explicit driver/runtim
 
 | Component | Ubuntu Package(s) | Purpose |
 |-----------|-------------------|---------|
-| Intel GPU kernel driver | `linux-firmware`, `i915` (in-kernel) | Base GPU driver (included in kernel 6.2+) |
+| Intel GPU kernel driver | `linux-firmware`, `i915`/`xe` (in-kernel) | Base GPU driver — full Panther Lake Xe3 + SR-IOV support in kernel 6.17 |
 | Intel compute runtime | `intel-opencl-icd`, `intel-level-zero-gpu` | OpenCL + Level Zero user-space drivers |
 | Vulkan driver | `mesa-vulkan-drivers` | Vulkan support for LlamaCPP |
 | oneAPI runtime | `intel-oneapi-runtime-compilers`, `intel-oneapi-runtime-mkl` | SYCL/DPC++ runtime for IPEX |
-| NPU driver | `intel-npu-driver`, `intel-fw-npu` | NPU 5 acceleration (Panther Lake / Arrow Lake / Meteor Lake) |
+| NPU driver | `intel-npu-driver`, `intel-fw-npu` | NPU 5 acceleration (Panther Lake / Arrow Lake / Meteor Lake) — kernel 6.17 has native IVPU support |
 | OpenVINO runtime | `openvino` (pip) or `intel-openvino-*` (APT) | OpenVINO inference |
 | Intel XPU Manager | `intel-xpumanager` | `xpu-smi` for GPU detection |
 
@@ -416,18 +429,62 @@ sudo apt install -y \
 
 ### Kernel Requirements
 
-| Feature | Minimum Kernel | Ubuntu 24.04 Default | Notes |
-|---------|---------------|---------------------|-------|
-| Intel Arc GPU — Alchemist (i915/Xe) | 6.2 | 6.8 ✅ | Full support |
-| Intel Arc GPU — Battlemage (Xe2) | 6.10 | 6.8 ⚠️ | May need HWE kernel |
-| Intel NPU — Meteor Lake (NPU 3) | 6.5 | 6.8 ✅ | Supported |
-| Intel NPU — Arrow Lake (NPU 4) | 6.8 | 6.8 ✅ | Borderline — HWE recommended |
-| **Intel NPU — Panther Lake (NPU 5)** | **6.12+** | **6.8 ❌** | **Requires HWE kernel or Ubuntu 25.04+** |
-| Intel Xe3-LPG iGPU (Panther Lake) | 6.12+ | 6.8 ❌ | Requires HWE kernel or Ubuntu 25.04+ |
+**Target kernel: 6.17** — All features fully supported.
 
-> **Important:** Panther Lake (Core Ultra 3) requires kernel 6.12+ for full iGPU (Xe3) and NPU 5 support.
-> On Ubuntu 24.04, install the HWE kernel: `sudo apt install linux-generic-hwe-24.04`
-> Alternatively, use Ubuntu 25.04+ which ships kernel 6.14.
+| Feature | Minimum Kernel | Kernel 6.17 | Notes |
+|---------|---------------|-------------|-------|
+| Intel Arc GPU — Alchemist (i915/Xe) | 6.2 | ✅ Supported | Full support |
+| Intel Arc GPU — Battlemage (Xe2) | 6.10 | ✅ Supported | Full support |
+| Intel NPU — Meteor Lake (NPU 3) | 6.5 | ✅ Supported | Full support |
+| Intel NPU — Arrow Lake (NPU 4) | 6.8 | ✅ Supported | Full support |
+| Intel NPU — Panther Lake (NPU 5) | 6.12+ | ✅ Supported | Native IVPU driver |
+| Intel Xe3-LPG iGPU (Panther Lake) | 6.12+ | ✅ Supported | Full compute + display |
+| **GPU SR-IOV (Virtual Functions)** | **6.14+** | **✅ Supported** | **Hardware GPU partitioning** |
+| **NPU SR-IOV** | **6.16+** | **✅ Supported** | **NPU workload isolation** |
+
+> **Note:** With kernel 6.17, there are no kernel version blockers. All Panther Lake hardware
+> features including GPU SR-IOV and NPU 5 are natively supported.
+>
+> On Ubuntu 24.04, install kernel 6.17 via mainline PPA or custom build.
+> Ubuntu 25.04+ may ship with kernel 6.14+; kernel 6.17 can be installed separately.
+
+### GPU SR-IOV (Single Root I/O Virtualization)
+
+Kernel 6.17 enables **Intel GPU SR-IOV**, which allows the physical GPU to be
+partitioned into multiple Virtual Functions (VFs). This is relevant for AI Playground because:
+
+- **Multi-backend GPU sharing:** LlamaCPP (Vulkan) and ComfyUI (SYCL) can each get a dedicated VF,
+  avoiding resource contention when running simultaneously.
+- **NPU + GPU isolation:** NPU inference and GPU inference run on isolated hardware paths natively.
+- **Future multi-user support:** SR-IOV enables running multiple AI Playground instances with
+  hardware-guaranteed GPU resource allocation.
+
+```mermaid
+graph LR
+    subgraph "Physical GPU (Xe3 iGPU or Arc dGPU)"
+        PF["PF — Physical Function\n(Host driver)"]
+        VF1["VF0 — LlamaCPP\n(Vulkan inference)"]
+        VF2["VF1 — ComfyUI\n(SYCL/IPEX inference)"]
+        VF3["VF2 — OpenVINO\n(GPU inference)"]
+    end
+
+    subgraph "NPU 5"
+        NPUPF["NPU PF"]
+        NPUVF1["NPU VF0 — OpenVINO\n(NPU chat inference)"]
+    end
+
+    PF --> VF1
+    PF --> VF2
+    PF --> VF3
+    NPUPF --> NPUVF1
+
+    style PF fill:#0071c5,color:#fff
+    style VF1 fill:#00aeef,color:#fff
+    style VF2 fill:#00aeef,color:#fff
+    style VF3 fill:#00aeef,color:#fff
+    style NPUPF fill:#e94560,color:#fff
+    style NPUVF1 fill:#e94560,color:#fff
+```
 
 ---
 
@@ -442,9 +499,10 @@ sudo apt install -y \
 | Different GPU driver versions across Ubuntu releases | Medium | Medium | Document minimum driver versions; add runtime check |
 | Electron AppImage size exceeds expectations | Low | Low | Use `asar` packing; exclude dev dependencies |
 | User confusion around driver installation | High | Medium | Build prerequisite checker into app; provide one-click install script |
-| **Panther Lake kernel support too new for Ubuntu 24.04** | **High** | **High** | **Require HWE kernel (6.12+); detect kernel version at startup; guide user to install** |
-| Panther Lake NPU 5 driver not yet in stable APT repos | Medium | High | Track `intel-npu-driver` releases; provide manual .deb install as fallback |
-| Xe3 iGPU (Panther Lake) Level Zero driver gaps | Medium | Medium | Monitor `intel-level-zero-gpu` package updates; test on pre-release drivers |
+| ~~Panther Lake kernel support too new for Ubuntu 24.04~~ | ~~N/A~~ | ~~N/A~~ | **Eliminated** — kernel 6.17 confirmed with all drivers working |
+| SR-IOV VF allocation conflicts with other GPU workloads | Low | Medium | Detect active VFs at startup; provide clear error if GPU is over-committed |
+| Panther Lake NPU 5 driver ABI changes between kernel releases | Low | Low | Pin to kernel 6.17; user-space `intel-npu-driver` must version-match |
+| Xe3 iGPU Level Zero driver gaps for new Xe3 instructions | Low | Medium | Monitor `intel-level-zero-gpu` package updates; test compute workloads early |
 
 ---
 
@@ -565,7 +623,7 @@ graph TD
         NPUD["NPU Driver\n(intel-npu-driver)"]
     end
 
-    KERNEL["Linux Kernel 6.12+\ni915 / Xe KMD / IVPU"]
+    KERNEL["Linux Kernel 6.17\ni915 / Xe KMD / IVPU / SR-IOV"]
 
     subgraph HW["Intel Core Ultra 3 — Panther Lake"]
         direction LR
@@ -696,8 +754,16 @@ ls /dev/accel*  # NPU device nodes
 cat /sys/class/accel/accel0/device/vendor  # Should show 0x8086
 dmesg | grep -i "intel_vpu\|ivpu"  # Kernel NPU driver messages
 
-# Check kernel version (6.12+ required for Panther Lake)
-uname -r
+# Check kernel version (6.17 with SR-IOV support)
+uname -r  # Should show 6.17.x
+
+# Check GPU SR-IOV status
+lspci | grep -i "virtual function"  # List SR-IOV VFs if enabled
+cat /sys/class/drm/card0/device/sriov_numvfs  # Number of active VFs
+echo 2 | sudo tee /sys/class/drm/card0/device/sriov_numvfs  # Enable 2 VFs
+
+# Check NPU SR-IOV
+cat /sys/class/accel/accel0/device/sriov_totalvfs  # Total supported NPU VFs
 
 # Check OpenVINO device detection (should show NPU on Panther Lake)
 python3 -c "from openvino import Core; print(Core().available_devices)"
@@ -705,9 +771,6 @@ python3 -c "from openvino import Core; print(Core().available_devices)"
 
 # Check SYCL runtime
 sycl-ls  # Lists SYCL devices if oneAPI runtime is installed
-
-# Install HWE kernel for Panther Lake on Ubuntu 24.04
-sudo apt install linux-generic-hwe-24.04
 ```
 
 ## Appendix D: Panther Lake — Hardware Capability Matrix
