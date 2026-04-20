@@ -1,7 +1,7 @@
 # Intel AI Playground — Linux Porting Proposal
 
 **Target Platform:** Ubuntu 24.04 LTS (Noble Numbat) and higher  
-**Target Hardware:** Intel CPU, Intel GPU (Arc/iGPU), Intel NPU (Meteor Lake+)  
+**Target Hardware:** Intel Core Ultra 3 (Panther Lake) — CPU, integrated GPU (Xe3), discrete GPU (Intel Arc), NPU 5  
 **Date:** April 2026  
 **Status:** Draft Proposal
 
@@ -28,6 +28,41 @@ The codebase already contains partial Linux support — the Electron shell, AI B
 
 This document identifies every technical gap, proposes a phased implementation plan, and covers the Intel driver/runtime stack required for full CPU + GPU + NPU support on Ubuntu 24.04+.
 
+The primary target hardware is **Intel Core Ultra 3 (Panther Lake)**, which integrates:
+- **CPU:** P-cores + E-cores (Intel Thread Director)
+- **iGPU:** Xe3-LPG integrated graphics with enhanced AI acceleration
+- **NPU 5:** Next-gen Neural Processing Unit with significantly improved TOPS
+- **Discrete GPU support:** Intel Arc (Battlemage / Alchemist) via PCIe
+
+### Target Hardware Architecture
+
+```mermaid
+block-beta
+  columns 4
+  
+  block:ptl:4
+    columns 4
+    header["Intel Core Ultra 3 — Panther Lake SoC"]
+    cpu["CPU Tile\nP-cores + E-cores\nThread Director"]
+    igpu["Xe3-LPG iGPU\nRay Tracing\nXMX AI Engines"]
+    npu["NPU 5\nNeural Compute\n~40+ TOPS"]
+    mem["Shared Memory\nLPDDR5x"]
+  end
+  
+  space:4
+  
+  block:discrete:4
+    columns 2
+    dheader["Discrete GPU (Optional)"]
+    arc["Intel Arc\nBattlemage / Alchemist\nPCIe x16"]
+  end
+
+  style ptl fill:#0071c5,color:#fff
+  style discrete fill:#00aeef,color:#fff
+  style header fill:#0071c5,color:#fff
+  style dheader fill:#00aeef,color:#fff
+```
+
 ---
 
 ## 2. Current State Assessment
@@ -50,7 +85,7 @@ This document identifies every technical gap, proposes a phased implementation p
 | Component | Status | Blocker |
 |-----------|--------|---------|
 | Intel GPU detection | ❌ Broken | `xpu-smi.exe` Win32-only; PowerShell WMI fallback Win32-only |
-| Intel NPU detection | ❌ Broken | Relies on OpenVINO backend device enumeration (which doesn't install on Linux) |
+| Intel NPU 5 detection | ❌ Broken | Relies on OpenVINO backend device enumeration (which doesn't install on Linux) |
 | OpenVINO Backend (OVMS) | ❌ Broken | Downloads only `ovms_windows_python_on.zip`; uses `powershell Expand-Archive` |
 | ComfyUI Backend | ❌ Broken | XPU torch backend defaults to `'cpu'` on Linux; SYCL runtime wheels are Win32-only |
 | LlamaCPP GPU inference | ❌ Missing | Linux build is CPU-only (`ubuntu-x64` vs `win-vulkan-x64`) |
@@ -142,19 +177,26 @@ This document identifies every technical gap, proposes a phased implementation p
 
 ---
 
-### Gap 5: NPU Support on Linux
+### Gap 5: NPU 5 Support on Linux (Panther Lake)
 
 **Current:** NPU detection works through OpenVINO's `openvino.Core().available_devices` which reports `NPU` when the NPU driver is loaded. Since the OpenVINO backend doesn't install on Linux (Gap 2), NPU is unreachable.
 
+**Panther Lake NPU 5 Considerations:**
+- Panther Lake ships with **NPU 5**, a significant upgrade over previous NPU generations with ~40+ TOPS.
+- The `intel-npu-driver` package must support the Panther Lake NPU device ID. Newer kernels (6.12+) are expected to have upstream i915/Xe and IVPU driver support for Panther Lake.
+- OpenVINO 2025.x+ is expected to have full NPU 5 support on Linux.
+- The `intel-driver-compiler-npu` and `intel-fw-npu` packages must be version-matched for Panther Lake.
+
 **Linux Requirements:**
-- Intel NPU driver for Linux (`intel-npu-driver`) is available for Ubuntu 24.04+ (kernel 6.5+).
-- The `intel-driver-compiler-npu` and `intel-fw-npu` packages are required.
-- OpenVINO 2024.x+ supports NPU on Linux natively.
+- Intel NPU driver for Linux (`intel-npu-driver`) — ensure Panther Lake device IDs are supported.
+- Kernel 6.10+ recommended for full Panther Lake NPU 5 support (Ubuntu 24.04 HWE kernel or 24.10+).
+- OpenVINO 2025.x+ supports NPU 5 on Linux natively.
 - Once the OpenVINO backend gap is resolved, NPU detection should work out-of-the-box via the same Python-based device enumeration.
 
 **Verification needed:**
-- Confirm OVMS Linux binary supports NPU device pass-through
-- If OVMS doesn't support NPU, consider using OpenVINO GenAI directly for NPU inference
+- Confirm OVMS Linux binary supports NPU 5 device pass-through on Panther Lake
+- If OVMS doesn't support NPU 5, consider using OpenVINO GenAI directly for NPU inference
+- Validate NPU 5 performance uplift vs Meteor Lake/Arrow Lake NPU on Linux
 
 ---
 
@@ -200,7 +242,7 @@ Unlike Windows where drivers auto-install, Linux requires explicit driver/runtim
 | Intel compute runtime | `intel-opencl-icd`, `intel-level-zero-gpu` | OpenCL + Level Zero user-space drivers |
 | Vulkan driver | `mesa-vulkan-drivers` | Vulkan support for LlamaCPP |
 | oneAPI runtime | `intel-oneapi-runtime-compilers`, `intel-oneapi-runtime-mkl` | SYCL/DPC++ runtime for IPEX |
-| NPU driver | `intel-npu-driver`, `intel-fw-npu` | NPU acceleration (Meteor Lake+) |
+| NPU driver | `intel-npu-driver`, `intel-fw-npu` | NPU 5 acceleration (Panther Lake / Arrow Lake / Meteor Lake) |
 | OpenVINO runtime | `openvino` (pip) or `intel-openvino-*` (APT) | OpenVINO inference |
 | Intel XPU Manager | `intel-xpumanager` | `xpu-smi` for GPU detection |
 
@@ -212,35 +254,40 @@ Unlike Windows where drivers auto-install, Linux requires explicit driver/runtim
 
 ## 4. High-Level Technical Plan
 
-```
-Phase 0: Foundation (Cross-Platform Fixes)
-├── Fix all hardcoded Windows paths, separators, env vars
-├── Add platform guards for Windows-only code paths
-└── Ensure all helpers use binary(), extract(), path.delimiter
+```mermaid
+gantt
+    title Linux Porting — High-Level Plan
+    dateFormat YYYY-MM-DD
+    axisFormat %b %d
 
-Phase 1: Core Linux Backend Support
-├── Intel GPU detection via lspci/sysfs on Linux
-├── OpenVINO backend Linux OVMS download + setup
-├── LlamaCPP Vulkan build for Linux
-└── NPU detection via OpenVINO device enumeration
+    section Phase 0 — Foundation
+    Fix hardcoded Windows paths/env vars    :p0a, 2026-05-01, 5d
+    Add platform guards                     :p0b, after p0a, 3d
+    Ensure helpers use binary()/extract()   :p0c, after p0a, 3d
+    Unit tests for platform utilities       :p0d, after p0b, 2d
 
-Phase 2: ComfyUI + XPU on Linux
-├── Linux XPU PyTorch + IPEX dependency resolution
-├── SYCL runtime detection (system packages vs pip)
-├── Enable torch xpu backend on Linux
-└── Validate ipex_to_cuda hijacks on Linux
+    section Phase 1 — Core Backends
+    Intel GPU detection (lspci/sysfs)       :p1a, after p0d, 5d
+    OpenVINO OVMS Linux download + setup    :p1b, after p0d, 7d
+    LlamaCPP Vulkan build for Linux         :p1c, after p0d, 3d
+    NPU 5 detection via OpenVINO            :p1d, after p1b, 5d
+    Chat inference E2E validation           :p1e, after p1d, 3d
 
-Phase 3: Packaging & Distribution
-├── electron-builder Linux targets (AppImage + .deb)
-├── Desktop entry, icons, file associations
-├── Driver/runtime prerequisite checker
-└── CI/CD pipeline for Linux builds
+    section Phase 2 — ComfyUI + XPU
+    Linux XPU PyTorch + IPEX deps           :p2a, after p1e, 5d
+    SYCL runtime detection                  :p2b, after p2a, 4d
+    Enable torch xpu on Linux               :p2c, after p2b, 3d
+    Validate ComfyUI workflows              :p2d, after p2c, 5d
 
-Phase 4: Polish & Validation
-├── End-to-end testing on Ubuntu 24.04
-├── Intel Arc dGPU + iGPU + NPU hardware validation
-├── Performance benchmarking vs Windows
-└── Documentation and user guide
+    section Phase 3 — Packaging
+    electron-builder AppImage + .deb        :p3a, after p2d, 5d
+    Driver prerequisite checker UI          :p3b, after p3a, 5d
+    Linux CI/CD pipeline                    :p3c, after p3a, 5d
+
+    section Phase 4 — Validation
+    Panther Lake HW validation matrix       :p4a, after p3c, 5d
+    Performance benchmarking                :p4b, after p4a, 5d
+    Documentation + release                 :p4c, after p4b, 5d
 ```
 
 ---
@@ -301,9 +348,9 @@ These are low-risk, high-value fixes that make the codebase Linux-ready without 
 
 | # | Task | Complexity |
 |---|------|------------|
-| 4.1 | E2E test: Chat inference via LlamaCPP Vulkan on Intel Arc | High |
-| 4.2 | E2E test: Chat inference via OpenVINO on CPU/GPU/NPU | High |
-| 4.3 | E2E test: Image generation via ComfyUI on Intel GPU | High |
+| 4.1 | E2E test: Chat inference via LlamaCPP Vulkan on Panther Lake iGPU + Arc dGPU | High |
+| 4.2 | E2E test: Chat inference via OpenVINO on Panther Lake CPU/iGPU/NPU 5 | High |
+| 4.3 | E2E test: Image generation via ComfyUI on Panther Lake iGPU + Arc dGPU | High |
 | 4.4 | E2E test: Model download + management via AI Backend | Medium |
 | 4.5 | E2E test: RAG document processing | Medium |
 | 4.6 | Performance benchmark: Linux vs Windows on identical hardware | Medium |
@@ -340,7 +387,7 @@ sudo apt install -y \
   intel-oneapi-runtime-compilers \
   intel-oneapi-runtime-mkl
 
-# Intel NPU driver (Meteor Lake / Arrow Lake / Lunar Lake)
+# Intel NPU driver (Panther Lake / Arrow Lake / Lunar Lake / Meteor Lake)
 sudo apt install -y \
   intel-npu-driver \
   intel-fw-npu
@@ -371,10 +418,16 @@ sudo apt install -y \
 
 | Feature | Minimum Kernel | Ubuntu 24.04 Default | Notes |
 |---------|---------------|---------------------|-------|
-| Intel Arc GPU (i915/Xe) | 6.2 | 6.8 ✅ | Full Alchemist support |
-| Intel NPU (IVPU) | 6.5 | 6.8 ✅ | Meteor Lake NPU |
-| Xe2 GPU (Lunar Lake) | 6.10 | 6.8 ⚠️ | May need HWE kernel |
-| Arrow Lake NPU | 6.8 | 6.8 ✅ | Borderline — HWE recommended |
+| Intel Arc GPU — Alchemist (i915/Xe) | 6.2 | 6.8 ✅ | Full support |
+| Intel Arc GPU — Battlemage (Xe2) | 6.10 | 6.8 ⚠️ | May need HWE kernel |
+| Intel NPU — Meteor Lake (NPU 3) | 6.5 | 6.8 ✅ | Supported |
+| Intel NPU — Arrow Lake (NPU 4) | 6.8 | 6.8 ✅ | Borderline — HWE recommended |
+| **Intel NPU — Panther Lake (NPU 5)** | **6.12+** | **6.8 ❌** | **Requires HWE kernel or Ubuntu 25.04+** |
+| Intel Xe3-LPG iGPU (Panther Lake) | 6.12+ | 6.8 ❌ | Requires HWE kernel or Ubuntu 25.04+ |
+
+> **Important:** Panther Lake (Core Ultra 3) requires kernel 6.12+ for full iGPU (Xe3) and NPU 5 support.
+> On Ubuntu 24.04, install the HWE kernel: `sudo apt install linux-generic-hwe-24.04`
+> Alternatively, use Ubuntu 25.04+ which ships kernel 6.14.
 
 ---
 
@@ -382,14 +435,16 @@ sudo apt install -y \
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| OVMS Linux binary lacks NPU support | Medium | High | Test early; fallback to OpenVINO GenAI Python API for NPU |
+| OVMS Linux binary lacks NPU 5 support | Medium | High | Test early; fallback to OpenVINO GenAI Python API for NPU |
 | Intel XPU PyTorch wheels have Linux compatibility issues | Medium | High | Test IPEX on Ubuntu 24.04 early in Phase 2; maintain CPU fallback |
 | SYCL runtime version conflicts between system packages and pip | High | Medium | Pin versions; prefer system packages; set `LD_LIBRARY_PATH` carefully |
 | LlamaCPP Vulkan build has performance regressions on Intel GPUs | Low | Medium | Benchmark early; consider SYCL backend as alternative |
 | Different GPU driver versions across Ubuntu releases | Medium | Medium | Document minimum driver versions; add runtime check |
 | Electron AppImage size exceeds expectations | Low | Low | Use `asar` packing; exclude dev dependencies |
 | User confusion around driver installation | High | Medium | Build prerequisite checker into app; provide one-click install script |
-| Kernel version too old for Xe2/Arrow Lake NPU | Medium | Medium | Detect kernel version; recommend HWE kernel upgrade |
+| **Panther Lake kernel support too new for Ubuntu 24.04** | **High** | **High** | **Require HWE kernel (6.12+); detect kernel version at startup; guide user to install** |
+| Panther Lake NPU 5 driver not yet in stable APT repos | Medium | High | Track `intel-npu-driver` releases; provide manual .deb install as fallback |
+| Xe3 iGPU (Panther Lake) Level Zero driver gaps | Medium | Medium | Monitor `intel-level-zero-gpu` package updates; test on pre-release drivers |
 
 ---
 
@@ -412,8 +467,8 @@ sudo apt install -y \
 - OVMS Linux binary download, extraction, and startup
 - LlamaCPP Vulkan build for Linux
 - NPU detection via OpenVINO device enumeration
-- **Deliverable:** Chat inference working on Ubuntu 24.04 with Intel Arc GPU and NPU
-- **Test milestone:** Send a chat message → receive streaming response via both LlamaCPP (Vulkan) and OpenVINO backends
+- **Deliverable:** Chat inference working on Ubuntu 24.04 with Panther Lake iGPU/NPU 5 and Intel Arc dGPU
+- **Test milestone:** Send a chat message → receive streaming response via both LlamaCPP (Vulkan) and OpenVINO backends on Panther Lake hardware
 
 ### Phase 2: ComfyUI + XPU on Linux (3-4 weeks)
 
@@ -423,8 +478,8 @@ sudo apt install -y \
 - SYCL runtime detection and `LD_LIBRARY_PATH` setup
 - Enable torch XPU backend on Linux
 - Validate ComfyUI workflows (Stable Diffusion, FLUX, etc.)
-- **Deliverable:** Image generation working on Ubuntu 24.04 with Intel Arc GPU
-- **Test milestone:** Generate an image via Stable Diffusion 1.5 preset on Intel Arc
+- **Deliverable:** Image generation working on Ubuntu 24.04 with Panther Lake Xe3 iGPU and Intel Arc dGPU
+- **Test milestone:** Generate an image via Stable Diffusion 1.5 preset on Panther Lake iGPU or Intel Arc
 
 ### Phase 3: Packaging & Distribution (2-3 weeks)
 
@@ -439,8 +494,9 @@ sudo apt install -y \
 
 **Goal:** Production-quality Linux support.
 
-- Hardware validation matrix (Intel Arc A770, A750, A580, iGPU, NPU)
-- Performance benchmarking
+- Hardware validation on Intel Core Ultra 3 (Panther Lake): iGPU (Xe3), NPU 5, CPU
+- Hardware validation on Intel Arc discrete GPUs (Battlemage B580, Alchemist A770/A750)
+- Performance benchmarking (Panther Lake vs equivalent Windows config)
 - User documentation
 - Bug fixes from testing
 - **Deliverable:** Release-ready Linux build with documentation
@@ -476,26 +532,150 @@ New files to create:
 
 ## Appendix B: Architecture Diagram — Linux Target
 
+### Full Application Stack
+
+```mermaid
+graph TD
+    subgraph APP["Intel AI Playground"]
+        direction TB
+        UI["Electron + Vue.js Frontend"]
+        
+        subgraph BACKENDS["Backend Services"]
+            direction LR
+            AIB["AI Backend\n(Flask/Python)\nModel Management"]
+            LLAMA["LlamaCPP\n(Vulkan)\nGGUF Inference"]
+            OV["OpenVINO\n(OVMS)\nOV Model Inference"]
+            COMFY["ComfyUI\n(IPEX/XPU)\nImage Generation"]
+        end
+    end
+
+    subgraph RUNTIME["Intel oneAPI Runtime Stack"]
+        direction LR
+        SYCL["SYCL / DPC++\nCompiler Runtime"]
+        MKL["oneMKL\nMath Kernels"]
+        L0["Level Zero\nGPU Compute API"]
+        OVRT["OpenVINO\nRuntime"]
+    end
+
+    subgraph DRIVERS["Linux User-Space Drivers"]
+        direction LR
+        VK["Vulkan\n(Mesa ANV)"]
+        LZD["Level Zero\n(intel-level-zero-gpu)"]
+        OCL["OpenCL\n(intel-opencl-icd)"]
+        NPUD["NPU Driver\n(intel-npu-driver)"]
+    end
+
+    KERNEL["Linux Kernel 6.12+\ni915 / Xe KMD / IVPU"]
+
+    subgraph HW["Intel Core Ultra 3 — Panther Lake"]
+        direction LR
+        CPU["CPU\nP-cores + E-cores"]
+        iGPU["Xe3-LPG iGPU\nXMX AI Engines"]
+        NPU["NPU 5\n~40+ TOPS"]
+        ARC["Intel Arc dGPU\n(Optional PCIe)"]
+    end
+
+    UI -->|IPC| BACKENDS
+    AIB -->|HTTP| UI
+    LLAMA -->|HTTP /v1/chat| UI
+    OV -->|HTTP /v1/chat| UI
+    COMFY -->|WebSocket + HTTP| UI
+
+    LLAMA --> VK
+    OV --> OVRT
+    COMFY --> SYCL
+    COMFY --> MKL
+    OV --> NPUD
+    OVRT --> L0
+    OVRT --> NPUD
+    SYCL --> L0
+    VK --> KERNEL
+    LZD --> KERNEL
+    OCL --> KERNEL
+    NPUD --> KERNEL
+    KERNEL --> HW
+
+    style APP fill:#1a1a2e,color:#fff,stroke:#0071c5
+    style BACKENDS fill:#16213e,color:#fff,stroke:#0071c5
+    style RUNTIME fill:#0f3460,color:#fff,stroke:#00aeef
+    style DRIVERS fill:#533483,color:#fff,stroke:#00aeef
+    style HW fill:#0071c5,color:#fff,stroke:#fff
+    style KERNEL fill:#e94560,color:#fff,stroke:#fff
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                      Intel AI Playground                         │
-│                    (Electron + Vue.js)                            │
-├──────────────┬──────────────┬──────────────┬─────────────────────┤
-│  AI Backend  │   LlamaCPP   │   OpenVINO   │      ComfyUI       │
-│  (Flask/Py)  │  (Vulkan)    │   (OVMS)     │   (IPEX/XPU)       │
-├──────────────┴──────────────┴──────────────┴─────────────────────┤
-│                     Python / Native Binaries                     │
-├──────────────────────────────────────────────────────────────────┤
-│              Intel oneAPI Runtime (SYCL, MKL, L0)                │
-├──────────────┬──────────────┬──────────────┬─────────────────────┤
-│   Vulkan     │  Level Zero  │   OpenCL     │   NPU Runtime      │
-│  (Mesa)      │  (compute)   │   (legacy)   │   (intel-npu)      │
-├──────────────┴──────────────┴──────────────┴─────────────────────┤
-│                   Linux Kernel 6.8+ (i915/Xe)                    │
-├──────────────────────────────────────────────────────────────────┤
-│     Intel Arc dGPU    │    Intel iGPU    │    Intel NPU          │
-│   (Alchemist/Xe)      │  (integrated)    │  (Meteor Lake+)       │
-└──────────────────────────────────────────────────────────────────┘
+
+### Backend ↔ Hardware Mapping
+
+```mermaid
+graph LR
+    subgraph Backends
+        LLAMA[LlamaCPP]
+        OV[OpenVINO OVMS]
+        COMFY[ComfyUI]
+        AIB[AI Backend]
+    end
+
+    subgraph Interfaces
+        VK[Vulkan]
+        L0[Level Zero]
+        OVR[OpenVINO RT]
+        NPUDRV[NPU Driver]
+    end
+
+    subgraph "Panther Lake Hardware"
+        CPU[CPU]
+        iGPU[Xe3 iGPU]
+        NPU5[NPU 5]
+        ARC[Arc dGPU]
+    end
+
+    LLAMA -->|Vulkan| VK
+    OV -->|OpenVINO| OVR
+    OV -->|NPU| NPUDRV
+    COMFY -->|SYCL/IPEX| L0
+    AIB -->|Python| CPU
+
+    VK --> iGPU
+    VK --> ARC
+    L0 --> iGPU
+    L0 --> ARC
+    OVR --> CPU
+    OVR --> iGPU
+    OVR --> ARC
+    NPUDRV --> NPU5
+
+    style CPU fill:#6c757d,color:#fff
+    style iGPU fill:#0071c5,color:#fff
+    style NPU5 fill:#e94560,color:#fff
+    style ARC fill:#00aeef,color:#fff
+```
+
+### NPU 5 Inference Path (Panther Lake)
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Electron as Electron Frontend
+    participant IPC as IPC Main Process
+    participant OVMS as OpenVINO OVMS
+    participant OVCore as OpenVINO Core
+    participant NPU as NPU 5 (Panther Lake)
+
+    User->>Electron: Send chat message (NPU preset)
+    Electron->>IPC: ensureBackendReadiness(openvino-backend)
+    IPC->>OVMS: Start / verify health (/v2/health/ready)
+    OVMS->>OVCore: Load model with device=NPU
+    OVCore->>NPU: Compile model for NPU 5
+    NPU-->>OVCore: Model ready
+    OVCore-->>OVMS: Model loaded
+    OVMS-->>IPC: Health OK
+    IPC-->>Electron: Backend ready
+    Electron->>OVMS: POST /v1/chat/completions (stream)
+    OVMS->>NPU: Inference (token generation)
+    loop Token Streaming
+        NPU-->>OVMS: Next token
+        OVMS-->>Electron: SSE token event
+        Electron-->>User: Display token
+    end
 ```
 
 ## Appendix C: Quick Reference Commands
@@ -511,14 +691,65 @@ cat /sys/class/drm/card0/device/vendor  # Should show 0x8086
 # Check Vulkan support
 vulkaninfo --summary 2>/dev/null | grep "Intel"
 
-# Check NPU driver
+# Check NPU driver (Panther Lake NPU 5)
 ls /dev/accel*  # NPU device nodes
 cat /sys/class/accel/accel0/device/vendor  # Should show 0x8086
+dmesg | grep -i "intel_vpu\|ivpu"  # Kernel NPU driver messages
 
-# Check OpenVINO device detection
+# Check kernel version (6.12+ required for Panther Lake)
+uname -r
+
+# Check OpenVINO device detection (should show NPU on Panther Lake)
 python3 -c "from openvino import Core; print(Core().available_devices)"
-# Expected: ['CPU', 'GPU', 'NPU'] (depending on hardware)
+# Expected: ['CPU', 'GPU', 'NPU']
 
 # Check SYCL runtime
 sycl-ls  # Lists SYCL devices if oneAPI runtime is installed
+
+# Install HWE kernel for Panther Lake on Ubuntu 24.04
+sudo apt install linux-generic-hwe-24.04
 ```
+
+## Appendix D: Panther Lake — Hardware Capability Matrix
+
+```mermaid
+graph TD
+    subgraph "Inference Backend Compatibility"
+        direction TB
+        
+        subgraph "Intel Core Ultra 3 — Panther Lake"
+            CPU_PTL["CPU (P+E cores)"]
+            IGPU_PTL["Xe3-LPG iGPU"]
+            NPU5_PTL["NPU 5 (~40+ TOPS)"]
+        end
+        
+        subgraph "Intel Arc dGPU (Optional)"
+            ARC_BM["Battlemage (B580)"]
+            ARC_AL["Alchemist (A770/A750)"]
+        end
+    end
+
+    CPU_PTL -->|"OpenVINO, LlamaCPP"| SUPPORTED1[✅ Supported]
+    IGPU_PTL -->|"OpenVINO, Vulkan, SYCL"| SUPPORTED2[✅ Supported]
+    NPU5_PTL -->|"OpenVINO (npu-chat preset)"| SUPPORTED3[✅ Supported]
+    ARC_BM -->|"Vulkan, Level Zero, SYCL"| SUPPORTED4[✅ Supported]
+    ARC_AL -->|"Vulkan, Level Zero, SYCL"| SUPPORTED5[✅ Supported]
+
+    style CPU_PTL fill:#6c757d,color:#fff
+    style IGPU_PTL fill:#0071c5,color:#fff
+    style NPU5_PTL fill:#e94560,color:#fff
+    style ARC_BM fill:#00aeef,color:#fff
+    style ARC_AL fill:#00aeef,color:#fff
+    style SUPPORTED1 fill:#28a745,color:#fff
+    style SUPPORTED2 fill:#28a745,color:#fff
+    style SUPPORTED3 fill:#28a745,color:#fff
+    style SUPPORTED4 fill:#28a745,color:#fff
+    style SUPPORTED5 fill:#28a745,color:#fff
+```
+
+| Compute Unit | LlamaCPP (Chat) | OpenVINO (Chat) | ComfyUI (Images) | NPU Chat | RAG Embedding |
+|---|---|---|---|---|---|
+| **CPU (P+E cores)** | ✅ Fallback | ✅ Full | ❌ Too slow | ❌ N/A | ✅ Full |
+| **Xe3 iGPU** | ✅ Vulkan | ✅ Full | ✅ SYCL/IPEX | ❌ N/A | ✅ Full |
+| **NPU 5** | ❌ N/A | ✅ Full | ❌ N/A | ✅ Primary | ❌ N/A |
+| **Arc dGPU** | ✅ Vulkan | ✅ Full | ✅ SYCL/IPEX | ❌ N/A | ✅ Full |
