@@ -11,7 +11,8 @@ export const aipgBaseDir = app.isPackaged
 export const buildResources = app.isPackaged
   ? aipgBaseDir
   : path.join(aipgBaseDir, 'build', 'resources')
-export const uvPath = path.join(buildResources, 'uv.exe')
+const uvBinary = process.platform === 'win32' ? 'uv.exe' : 'uv'
+export const uvPath = path.join(buildResources, uvBinary)
 const uvEnv = (extraEnv: Record<string, string> = {}) => ({
   ...process.env,
   UV_NO_ENV_FILE: '1',

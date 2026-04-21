@@ -9,6 +9,7 @@ import { exec } from 'child_process'
 import { LocalSettings } from '../main.ts'
 import getPort, { portNumbers } from 'get-port'
 import { installBackend } from './uvBasedBackends/uv.ts'
+import { extract } from './tools.ts'
 
 const execAsync = promisify(exec)
 
@@ -82,8 +83,10 @@ export class OpenVINOBackendService implements ApiService {
     // Set up paths
     this.serviceDir = path.resolve(path.join(this.baseDir, 'OpenVINO'))
     this.ovmsDir = path.resolve(path.join(this.serviceDir, 'ovms'))
-    this.ovmsExePath = path.resolve(path.join(this.ovmsDir, 'ovms.exe'))
-    this.zipPath = path.resolve(path.join(this.serviceDir, 'ovms.zip'))
+    const ovmsExe = process.platform === 'win32' ? 'ovms.exe' : 'ovms'
+    this.ovmsExePath = path.resolve(path.join(this.ovmsDir, ovmsExe))
+    const archiveExt = process.platform === 'win32' ? 'ovms.zip' : 'ovms.tar.gz'
+    this.zipPath = path.resolve(path.join(this.serviceDir, archiveExt))
     this.pythonEnvDir = path.resolve(path.join(this.serviceDir, '.venv'))
     this.detectDevicesScript = path.resolve(path.join(this.serviceDir, 'detect_devices.py'))
 
@@ -640,7 +643,9 @@ export class OpenVINOBackendService implements ApiService {
     const baseUrl =
       'https://storage.openvinotoolkit.org/repositories/openvino_model_server/packages'
     const versionPath = this.releaseTag ? `weekly/${this.version}.${this.releaseTag}` : this.version
-    const downloadUrl = `${baseUrl}/${versionPath}/ovms_windows_python_on.zip`
+    // Select platform-specific OVMS package
+    const ovmsPackage = process.platform === 'win32' ? 'ovms_windows_python_on.zip' : 'ovms_ubuntu_python_on.tar.gz'
+    const downloadUrl = `${baseUrl}/${versionPath}/${ovmsPackage}`
     this.appLogger.info(`Downloading OVMS from ${downloadUrl}`, this.name)
 
     // Delete existing zip if it exists
@@ -673,10 +678,9 @@ export class OpenVINOBackendService implements ApiService {
     // Create ovms directory
     filesystem.mkdirSync(this.ovmsDir, { recursive: true })
 
-    // Extract zip file using PowerShell's Expand-Archive
+    // Extract zip file using cross-platform extract helper
     try {
-      const command = `powershell -Command "Expand-Archive -Path '${this.zipPath}' -DestinationPath '${this.ovmsDir}' -Force"`
-      await execAsync(command)
+      await extract(this.zipPath, this.ovmsDir)
 
       this.appLogger.info(`OVMS extracted successfully`, this.name)
 

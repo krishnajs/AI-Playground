@@ -856,13 +856,17 @@ export class ComfyUiBackendService extends LongLivedPythonApiService {
 
   private getCommonEnvVars(): Record<string, string> {
     return {
-      PATH: `${path.join(this.pythonEnvDir, 'Library', 'bin')};${path.join(this.git.dir, 'cmd')};${process.env.PATH}`,
+      PATH: [
+        path.join(this.pythonEnvDir, 'Library', 'bin'),
+        path.join(this.git.dir, 'cmd'),
+        process.env.PATH,
+      ].join(path.delimiter),
       PYTHONNOUSERSITE: 'true',
       SYCL_ENABLE_DEFAULT_CONTEXTS: '1',
       SYCL_CACHE_PERSISTENT: '1',
       PYTHONIOENCODING: 'utf-8',
       HF_ENDPOINT: this.settings.huggingfaceEndpoint,
-      PIP_CONFIG_FILE: 'nul',
+      PIP_CONFIG_FILE: process.platform === 'win32' ? 'nul' : '/dev/null',
       UV_NO_CONFIG: '1',
       UV_TORCH_BACKEND: this.torchBackendValue,
     }
