@@ -621,16 +621,31 @@ app.on('quit', async () => {
     app.releaseSingleInstanceLock()
   }
 })
-// Quit when all windows are closed, except on macOS. There, it's common
-// for applications and their menu bar to stay active until the user quits
-// explicitly with Cmd + Q.
-app.on('window-all-closed', async () => {
+
+async function shutdownServicesAndQuit() {
   try {
     await stopAllMcpServers()
     await serviceRegistry?.stopAllServices()
   } catch {}
+  app.quit()
+}
+
+// Quit when all windows are closed, except on macOS and Linux.
+// - macOS: apps stay active until Cmd+Q (standard macOS behavior).
+// - Linux: keep services running when the window is closed so the user can
+//   reconnect via browser (http://localhost:25413) without losing AI sessions.
+//   Use Ctrl+C / SIGTERM in the terminal to fully quit.
+app.on('window-all-closed', async () => {
+  if (process.platform === 'linux') {
+    appLogger.info(
+      'Window closed — AI services continue running. Open http://localhost:25413 to reconnect. Press Ctrl+C in the terminal to quit.',
+      'electron-backend',
+    )
+    win = null
+    return
+  }
   if (process.platform !== 'darwin') {
-    app.quit()
+    await shutdownServicesAndQuit()
     win = null
   }
 })
@@ -1731,8 +1746,12 @@ function needAdminPermission() {
     fs.writeFile(filename, '', (err) => {
       if (err) {
         if (err && err.code == 'EPERM') {
-          if (path.parse(externalRes).root == path.parse(process.env.windir!).root) {
+          // windir is only defined on Windows; on Linux/macOS this check is not needed
+          if (process.platform === 'win32' && process.env.windir &&
+              path.parse(externalRes).root == path.parse(process.env.windir).root) {
             resolve(!isAdmin())
+          } else {
+            resolve(false)
           }
         } else {
           resolve(false)
@@ -1814,5 +1833,17 @@ app.whenReady().then(async () => {
     const window = await createWindow()
     await initServiceRegistry(window, settings)
     spawnLangchainUtilityProcess()
+
+    // On Linux: handle SIGINT (Ctrl+C) and SIGTERM for clean shutdown.
+    // These are the correct way to quit when the window-all-closed event
+    // no longer auto-quits (services stay running after window close).
+    if (process.platform === 'linux') {
+      const handleShutdownSignal = (signal: string) => {
+        appLogger.info(`Received ${signal} — shutting down AI services...`, 'electron-backend')
+        shutdownServicesAndQuit()
+      }
+      process.on('SIGINT', () => handleShutdownSignal('SIGINT'))
+      process.on('SIGTERM', () => handleShutdownSignal('SIGTERM'))
+    }
   }
 })

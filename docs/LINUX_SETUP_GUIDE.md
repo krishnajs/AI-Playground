@@ -169,17 +169,42 @@ Verify binaries are executable:
 
 ### 5. Launch Application
 
+**Option A — Convenience script (recommended):**
+
 ```bash
+cd /path/to/AI-Playground
+chmod +x start-ui.sh
+./start-ui.sh
+```
+
+**Option B — Manual:**
+
+```bash
+cd WebUI
 npm run dev
 ```
 
 Expected output:
 ```
+  Intel AI Playground - Linux
+  ─────────────────────────────────────────────────────
+  UI:           http://localhost:25413
+  AI Backend:   http://localhost:59000
+
+  Closing the window does NOT stop services.
+  Press Ctrl+C here to fully quit.
+  ─────────────────────────────────────────────────────
+
 VITE v8.0.8  ready in ~500ms
 ➜ Local: http://127.0.0.1:25413/
 ```
 
-The application will be accessible at `http://localhost:25413`
+Open **http://localhost:25413** in your browser.
+
+> **Key behavior on Linux:**  
+> Closing the Electron window (or the X11 session) does **not** stop the AI services.  
+> Services (Flask AI backend, LlamaCPP, etc.) keep running until you press **Ctrl+C** in  
+> the terminal. You can close and reopen the browser tab at any time without losing sessions.
 
 **For Remote Access via SSH:**
 
@@ -308,12 +333,9 @@ grep -i error /tmp/app-log.txt | grep -v "MESA-INTEL"
    # Should show: tcp ... 127.0.0.1:25413 ... LISTEN
    ```
 
-2. Restart the application:
+2. Restart the application (Ctrl+C first, then):
    ```bash
-   pkill -f electron
-   pkill -f vite
-   cd WebUI
-   npm run dev
+   ./start-ui.sh
    ```
 
 3. Check for port conflicts:

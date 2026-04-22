@@ -438,10 +438,41 @@ export class LlamaCppBackendService implements ApiService {
     }
   }
 
+  /**
+   * Check whether Vulkan is available on Linux by probing common library paths.
+   * Returns true when a Vulkan ICD loader is found — GPU inference will be used.
+   */
+  private async linuxHasVulkan(): Promise<boolean> {
+    if (process.platform !== 'linux') return false
+    const vulkanPaths = [
+      '/usr/lib/x86_64-linux-gnu/libvulkan.so.1',
+      '/usr/lib/x86_64-linux-gnu/libvulkan.so',
+      '/usr/lib/libvulkan.so.1',
+      '/usr/lib/libvulkan.so',
+      '/usr/local/lib/libvulkan.so.1',
+    ]
+    const { existsSync } = await import('fs')
+    if (vulkanPaths.some((p) => existsSync(p))) return true
+    // Fallback: ask vulkaninfo (non-zero / not-found → no Vulkan)
+    try {
+      await execAsync('vulkaninfo --summary', { timeout: 3000 })
+      return true
+    } catch {
+      return false
+    }
+  }
+
   private async downloadLlamacpp(): Promise<void> {
+    const linuxArch = (await this.linuxHasVulkan()) ? 'linux-vulkan-x64' : 'ubuntu-x64'
+    if (process.platform === 'linux') {
+      this.appLogger.info(
+        `Linux Vulkan ${linuxArch === 'linux-vulkan-x64' ? 'detected — using GPU build' : 'not found — using CPU-only build'}`,
+        this.name,
+      )
+    }
     const platformArchMap: Record<string, string> = {
       darwin: 'macos-arm64',
-      linux: 'ubuntu-x64',
+      linux: linuxArch,
       win32: 'win-vulkan-x64',
     }
     const platformArch = platformArchMap[process.platform] ?? 'win-vulkan-x64'
@@ -495,6 +526,14 @@ export class LlamaCppBackendService implements ApiService {
       }
 
       this.appLogger.info(`LlamaCPP extracted successfully`, this.name)
+
+      if (process.platform !== 'win32') {
+        const exePath = path.join(this.llamaCppDir, binary('llama-server'))
+        if (filesystem.existsSync(exePath)) {
+          await filesystem.chmod(exePath, 0o755)
+          this.appLogger.info(`Made llama-server executable`, this.name)
+        }
+      }
     } catch (error) {
       this.appLogger.error(`Failed to extract LlamaCPP: ${error}`, this.name)
       throw error

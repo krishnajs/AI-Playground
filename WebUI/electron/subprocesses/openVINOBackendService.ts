@@ -240,7 +240,10 @@ export class OpenVINOBackendService implements ApiService {
         env: {
           ...process.env,
           VIRTUAL_ENV: this.pythonEnvDir,
-          PATH: `${path.join(this.pythonEnvDir, 'Scripts')};${path.join(this.pythonEnvDir, 'bin')};${process.env.PATH}`,
+          PATH: [
+            path.join(this.pythonEnvDir, process.platform === 'win32' ? 'Scripts' : 'bin'),
+            process.env.PATH,
+          ].join(path.delimiter),
         },
       })
 
@@ -315,7 +318,7 @@ export class OpenVINOBackendService implements ApiService {
 
       // Set up environment variables as per setupvars.ps1
       const pythonDir = path.join(this.ovmsDir, 'python')
-      const scriptsDir = path.join(this.ovmsDir, 'python', 'Scripts')
+      const scriptsDir = path.join(pythonDir, process.platform === 'win32' ? 'Scripts' : 'bin')
 
       const childProcess = spawn(this.ovmsExePath, args, {
         cwd: this.ovmsDir,
@@ -324,7 +327,7 @@ export class OpenVINOBackendService implements ApiService {
           ...process.env,
           OVMS_DIR: this.ovmsDir,
           PYTHONHOME: pythonDir,
-          PATH: `${this.ovmsDir};${pythonDir};${scriptsDir};${process.env.PATH}`,
+          PATH: [this.ovmsDir, pythonDir, scriptsDir, process.env.PATH].join(path.delimiter),
         },
       })
 
@@ -640,24 +643,83 @@ export class OpenVINOBackendService implements ApiService {
   }
 
   private async downloadOvms(): Promise<void> {
-    const baseUrl =
-      'https://storage.openvinotoolkit.org/repositories/openvino_model_server/packages'
-    const versionPath = this.releaseTag ? `weekly/${this.version}.${this.releaseTag}` : this.version
-    // Select platform-specific OVMS package
-    const ovmsPackage = process.platform === 'win32' ? 'ovms_windows_python_on.zip' : 'ovms_ubuntu_python_on.tar.gz'
-    const downloadUrl = `${baseUrl}/${versionPath}/${ovmsPackage}`
+    // Build an ordered list of candidate URLs to try, most-specific first.
+    //
+    // Windows  – still uses the OpenVINO toolkit storage (zip, no version in filename).
+    // Linux    – GitHub Releases are canonical; storage is a fallback.
+    //   GitHub asset names embed the full version, e.g.:
+    //     ovms_ubuntu24_2026.1.0_python_on.tar.gz
+    //   Storage path for weekly builds:
+    //     .../weekly/2026.1.0.72cc0624/ovms_ubuntu24_2026.1.0_python_on.tar.gz
+    //   Storage path for stable releases:
+    //     .../2026.1.0/ovms_ubuntu24_2026.1.0_python_on.tar.gz
+
+    const candidates: string[] = []
+
+    if (process.platform === 'win32') {
+      const baseUrl =
+        'https://storage.openvinotoolkit.org/repositories/openvino_model_server/packages'
+      const versionPath = this.releaseTag
+        ? `weekly/${this.version}.${this.releaseTag}`
+        : this.version
+      candidates.push(`${baseUrl}/${versionPath}/ovms_windows_python_on.zip`)
+    } else {
+      // Linux: build the versioned filename used by both GitHub releases and storage.
+      // Prefer Ubuntu 24 (ships with Python). Fall back to Ubuntu 22 if 24 is absent.
+      const linuxVariants = ['ubuntu24', 'ubuntu22']
+      for (const distro of linuxVariants) {
+        const pkg = `ovms_${distro}_${this.version}_python_on.tar.gz`
+
+        // 1. GitHub Releases (most reliable for versioned packages)
+        const gitTag = `v${this.version}`
+        candidates.push(
+          `https://github.com/openvinotoolkit/model_server/releases/download/${gitTag}/${pkg}`,
+        )
+
+        // 2. OpenVINO toolkit storage – weekly build
+        const baseUrl =
+          'https://storage.openvinotoolkit.org/repositories/openvino_model_server/packages'
+        if (this.releaseTag) {
+          candidates.push(
+            `${baseUrl}/weekly/${this.version}.${this.releaseTag}/${pkg}`,
+          )
+        }
+
+        // 3. OpenVINO toolkit storage – stable
+        candidates.push(`${baseUrl}/${this.version}/${pkg}`)
+      }
+    }
+
+    let response: Response | undefined
+    let downloadUrl = ''
+    for (const url of candidates) {
+      this.appLogger.info(`Trying OVMS download URL: ${url}`, this.name)
+      const res = await net.fetch(url)
+      const contentType = res.headers.get('content-type') ?? ''
+      // Reject HTML responses (they indicate a 404/index page, not a real archive)
+      if (res.ok && res.status === 200 && res.body && !contentType.includes('text/html')) {
+        response = res
+        downloadUrl = url
+        break
+      }
+      this.appLogger.info(
+        `URL ${url} returned ${res.status} / content-type: ${contentType} — skipping`,
+        this.name,
+      )
+    }
+
+    if (!response || !response.body) {
+      throw new Error(
+        `Failed to download OVMS: no valid download URL found. Tried: ${candidates.join(', ')}`,
+      )
+    }
+
     this.appLogger.info(`Downloading OVMS from ${downloadUrl}`, this.name)
 
     // Delete existing zip if it exists
     if (filesystem.existsSync(this.zipPath)) {
       this.appLogger.info(`Removing existing OVMS zip file`, this.name)
       filesystem.removeSync(this.zipPath)
-    }
-
-    // Using electron net for better proxy support
-    const response = await net.fetch(downloadUrl)
-    if (!response.ok || response.status !== 200 || !response.body) {
-      throw new Error(`Failed to download OVMS: ${response.statusText}`)
     }
 
     const buffer = await response.arrayBuffer()
@@ -683,6 +745,12 @@ export class OpenVINOBackendService implements ApiService {
       await extract(this.zipPath, this.ovmsDir)
 
       this.appLogger.info(`OVMS extracted successfully`, this.name)
+
+      // On Linux, ensure the ovms binary is executable (tar.gz may not preserve bits)
+      if (process.platform !== 'win32' && filesystem.existsSync(this.ovmsExePath)) {
+        await filesystem.chmod(this.ovmsExePath, 0o755)
+        this.appLogger.info(`Made ovms binary executable`, this.name)
+      }
 
       // Check if there's only a single top-level folder and move its contents up
       const items = filesystem.readdirSync(this.ovmsDir)
@@ -873,7 +941,7 @@ export class OpenVINOBackendService implements ApiService {
 
       // Set up environment variables as per setupvars.ps1
       const pythonDir = path.join(this.ovmsDir, 'python')
-      const scriptsDir = path.join(this.ovmsDir, 'python', 'Scripts')
+      const scriptsDir = path.join(pythonDir, process.platform === 'win32' ? 'Scripts' : 'bin')
 
       const childProcess = spawn(this.ovmsExePath, args, {
         cwd: this.ovmsDir,
@@ -882,7 +950,7 @@ export class OpenVINOBackendService implements ApiService {
           ...process.env,
           OVMS_DIR: this.ovmsDir,
           PYTHONHOME: pythonDir,
-          PATH: `${this.ovmsDir};${pythonDir};${scriptsDir};${process.env.PATH}`,
+          PATH: [this.ovmsDir, pythonDir, scriptsDir, process.env.PATH].join(path.delimiter),
         },
       })
 
@@ -1008,7 +1076,7 @@ export class OpenVINOBackendService implements ApiService {
 
       // Set up environment variables as per setupvars.ps1
       const pythonDir = path.join(this.ovmsDir, 'python')
-      const scriptsDir = path.join(this.ovmsDir, 'python', 'Scripts')
+      const scriptsDir = path.join(pythonDir, process.platform === 'win32' ? 'Scripts' : 'bin')
 
       const childProcess = spawn(this.ovmsExePath, args, {
         cwd: this.ovmsDir,
@@ -1017,7 +1085,7 @@ export class OpenVINOBackendService implements ApiService {
           ...process.env,
           OVMS_DIR: this.ovmsDir,
           PYTHONHOME: pythonDir,
-          PATH: `${this.ovmsDir};${pythonDir};${scriptsDir};${process.env.PATH}`,
+          PATH: [this.ovmsDir, pythonDir, scriptsDir, process.env.PATH].join(path.delimiter),
         },
       })
 
@@ -1145,7 +1213,7 @@ export class OpenVINOBackendService implements ApiService {
 
       // Set up environment variables as per setupvars.ps1
       const pythonDir = path.join(this.ovmsDir, 'python')
-      const scriptsDir = path.join(this.ovmsDir, 'python', 'Scripts')
+      const scriptsDir = path.join(pythonDir, process.platform === 'win32' ? 'Scripts' : 'bin')
 
       const childProcess = spawn(this.ovmsExePath, args, {
         cwd: this.ovmsDir,
@@ -1154,7 +1222,7 @@ export class OpenVINOBackendService implements ApiService {
           ...process.env,
           OVMS_DIR: this.ovmsDir,
           PYTHONHOME: pythonDir,
-          PATH: `${this.ovmsDir};${pythonDir};${scriptsDir};${process.env.PATH}`,
+          PATH: [this.ovmsDir, pythonDir, scriptsDir, process.env.PATH].join(path.delimiter),
         },
       })
 
