@@ -1819,14 +1819,34 @@ app.whenReady().then(async () => {
 
     // Custom protocol docking is file protocol
     protocol.handle('aipg-media', async (request) => {
-      console.log('request', request)
       const decodedUrl = decodeURIComponent(
         request.url.replace(new RegExp(`^aipg-media://`, 'i'), '/'),
       )
 
       const fullPath = path.join(mediaDir, decodedUrl)
+      let normalizedPath = path.normalize(fullPath.replace(/(\/|\\)$/, ''))
 
-      const normalizedPath = path.normalize(fullPath.replace(/(\/|\\)$/, ''))
+      // On case-sensitive filesystems (Linux), Chromium lowercases the URL host
+      // for `standard` schemes, so the on-disk filename (e.g. `AIPG_Image_00001_.png`)
+      // won't match the lowercased URL. Fall back to a case-insensitive lookup.
+      if (!fs.existsSync(normalizedPath)) {
+        try {
+          const dir = path.dirname(normalizedPath)
+          const target = path.basename(normalizedPath).toLowerCase()
+          if (fs.existsSync(dir)) {
+            const match = fs.readdirSync(dir).find((entry) => entry.toLowerCase() === target)
+            if (match) {
+              normalizedPath = path.join(dir, match)
+            }
+          }
+        } catch (e) {
+          appLogger.error(
+            `aipg-media case-insensitive lookup failed: ${e}`,
+            'electron-backend',
+          )
+        }
+      }
+
       const response = await net.fetch(`file://${normalizedPath}`)
       return response
     })
