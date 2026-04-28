@@ -67,7 +67,7 @@ export class LlamaCppBackendService implements ApiService {
   // Logger
   readonly appLogger = appLoggerInstance
 
-  private version = 'b7278'
+  private version = 'b8708'
 
   private llamaCppParametersString: string = LLAMACPP_DEFAULT_PARAMETERS
 
@@ -89,7 +89,12 @@ export class LlamaCppBackendService implements ApiService {
     this.serviceDir = path.resolve(path.join(this.baseDir, 'LlamaCPP'))
     this.llamaCppDir = path.resolve(path.join(this.serviceDir, 'llama-cpp'))
     this.llamaCppExePath = path.resolve(path.join(this.llamaCppDir, binary('llama-server')))
-    this.zipPath = path.resolve(path.join(this.serviceDir, `llama-cpp.${platformExtension}`))
+    // On Linux use a platform-qualified archive name so an existing CPU-only tarball
+    // (llama-cpp.tar.gz) is never mistaken for the GPU/Vulkan build.
+    const zipFileName = process.platform === 'linux'
+      ? `llama-cpp-linux.${platformExtension}`
+      : `llama-cpp.${platformExtension}`
+    this.zipPath = path.resolve(path.join(this.serviceDir, zipFileName))
 
     // Check if already set up
     this.isSetUp = this.serviceIsSetUp()
@@ -463,10 +468,10 @@ export class LlamaCppBackendService implements ApiService {
   }
 
   private async downloadLlamacpp(): Promise<void> {
-    const linuxArch = (await this.linuxHasVulkan()) ? 'linux-vulkan-x64' : 'ubuntu-x64'
+    const linuxArch = (await this.linuxHasVulkan()) ? 'ubuntu-vulkan-x64' : 'ubuntu-x64'
     if (process.platform === 'linux') {
       this.appLogger.info(
-        `Linux Vulkan ${linuxArch === 'linux-vulkan-x64' ? 'detected — using GPU build' : 'not found — using CPU-only build'}`,
+        `Linux Vulkan ${linuxArch === 'ubuntu-vulkan-x64' ? 'detected — using GPU build' : 'not found — using CPU-only build'}`,
         this.name,
       )
     }

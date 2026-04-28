@@ -902,8 +902,10 @@ export class ComfyUiBackendService extends LongLivedPythonApiService {
   private getCommonEnvVars(): Record<string, string> {
     const envVars: Record<string, string> = {
       PATH: [
-        path.join(this.pythonEnvDir, 'Library', 'bin'),
-        path.join(this.git.dir, 'cmd'),
+        // Windows: Conda Library/bin + bundled Git cmd directory
+        ...(process.platform === 'win32'
+          ? [path.join(this.pythonEnvDir, 'Library', 'bin'), path.join(this.git.dir, 'cmd')]
+          : [path.join(this.pythonEnvDir, 'bin')]),  // Linux/macOS: venv bin
         process.env.PATH,
       ].join(path.delimiter),
       PYTHONNOUSERSITE: 'true',
@@ -925,6 +927,9 @@ export class ComfyUiBackendService extends LongLivedPythonApiService {
           .filter(Boolean)
           .join(path.delimiter)
       }
+      // Use composite device hierarchy so Level Zero can make large contiguous
+      // USM allocations (fixes XPU out-of-memory on Meteor Lake iGPU with shared memory)
+      envVars.ZE_FLAT_DEVICE_HIERARCHY = 'COMPOSITE'
     }
 
     return envVars
@@ -1133,6 +1138,18 @@ except Exception as e:
 
     const additionalEnvVariables = this.getEnvVars()
     const mediaDir = getMediaDir()
+    // On Linux XPU (Meteor Lake iGPU with shared memory), remove --lowvram:
+    // the iGPU shares up to 57 GB with the system, so --lowvram's piecemeal
+    // model loading fragments the SYCL USM memory pool and causes OOM on
+    // large single allocations (e.g., Flux attention tensors). Use normal
+    // VRAM mode with a small reserve instead.
+    const effectiveParams =
+      process.platform === 'linux' && this.comfyUiVariant === 'xpu'
+        ? this.comfyUiParametersString
+            .replace(/--lowvram\b/g, '')
+            .replace(/--reserve-vram\s+\S+/g, '--reserve-vram 2.0')
+            .trim()
+        : this.comfyUiParametersString
     const parameters = [
       'main.py',
       '--port',
@@ -1141,7 +1158,7 @@ except Exception as e:
       'auto',
       '--output-directory',
       mediaDir,
-      ...this.comfyUiParametersString.split(/\s+/).filter(Boolean),
+      ...effectiveParams.split(/\s+/).filter(Boolean),
     ]
     this.appLogger.info(
       `starting comfyui with ${JSON.stringify({ parameters, additionalEnvVariables })}`,
