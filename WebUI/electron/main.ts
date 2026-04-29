@@ -167,6 +167,17 @@ const modesDir = path.resolve(
     ? path.join(process.resourcesPath, 'modes')
     : path.join(__dirname, '../../../modes/'),
 )
+// On Linux with Xvfb or headless display, Electron's Chromium renderer cannot
+// use hardware GPU acceleration and will crash with "GPU process isn't usable".
+// Disable hardware acceleration so the software rasterizer is used instead.
+// This does NOT affect AI/compute workloads — those use Level Zero/SYCL directly.
+if (process.platform === 'linux') {
+  app.disableHardwareAcceleration()
+  app.commandLine.appendSwitch('disable-gpu')
+  app.commandLine.appendSwitch('disable-software-rasterizer', 'false')
+  app.commandLine.appendSwitch('no-sandbox')
+}
+
 const singleInstanceLock = app.requestSingleInstanceLock()
 
 const appLogger = appLoggerInstance
