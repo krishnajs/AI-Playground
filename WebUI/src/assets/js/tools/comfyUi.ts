@@ -24,7 +24,7 @@ const globalDefaultSettings = {
   height: 512,
   inferenceSteps: 6,
   resolution: '704x384',
-  batchSize: 4,
+  batchSize: 1,
   negativePrompt: 'nsfw',
 }
 

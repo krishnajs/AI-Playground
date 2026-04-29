@@ -70,9 +70,9 @@ function linuxHasIntelGpuRuntime(): boolean {
 // XPU variant is active on Linux. Only existing directories are returned.
 function getLinuxOneApiLibPaths(): string[] {
   const candidates = [
-    '/opt/intel/oneapi/compiler/latest/lib',
-    '/opt/intel/oneapi/compiler/latest/linux/lib',
-    '/opt/intel/oneapi/compiler/latest/linux/compiler/lib/intel64_lin',
+    // Note: compiler/latest/lib is intentionally excluded — its libintelocl.so
+    // overrides the system ze_loader and breaks XPU device detection.
+    // libsycl is already bundled inside the ComfyUI venv.
     '/opt/intel/oneapi/mkl/latest/lib',
     '/opt/intel/oneapi/mkl/latest/lib/intel64',
     '/opt/intel/oneapi/tbb/latest/lib',
@@ -615,11 +615,19 @@ export class ComfyUiBackendService extends LongLivedPythonApiService {
       try {
         if (this.comfyUiVariant === 'xpu') {
           this.appLogger.info('patching hijacks into comfyUI model_management (xpu)', this.name)
-          patchFile(
-            path.join(this.serviceDir, 'comfy/model_management.py'),
-            'from comfy.model_management import get_model',
-            ['from ipex_to_cuda import ipex_init', 'ipex_init()'],
-          )
+          try {
+            await patchFile(
+              path.join(this.serviceDir, 'comfy/model_management.py'),
+              'from comfy.model_management import get_model',
+              ['from ipex_to_cuda import ipex_init', 'ipex_init()'],
+            )
+          } catch (patchErr) {
+            // Newer ComfyUI / torch+xpu versions don't need the ipex_to_cuda bridge.
+            this.appLogger.info(
+              'ipex_to_cuda patch skipped (not applicable to this ComfyUI version): ' + patchErr,
+              this.name,
+            )
+          }
         } else {
           // If a previous install injected ipex_to_cuda, remove it for non-XPU variants.
           const mmPath = path.join(this.serviceDir, 'comfy/model_management.py')
