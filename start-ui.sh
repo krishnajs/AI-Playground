@@ -39,7 +39,7 @@ if [ ! -d "$WEBUI_DIR/node_modules" ]; then
   cd "$WEBUI_DIR" && npm install --legacy-peer-deps
 fi
 
-UV_BIN="$WEBUI_DIR/build/resources/uv"
+UV_BIN="$SCRIPT_DIR/build/resources/uv"
 if [ ! -x "$UV_BIN" ]; then
   echo "INFO: uv binary not found — fetching external resources..."
   cd "$WEBUI_DIR" && npm run fetch-external-resources
