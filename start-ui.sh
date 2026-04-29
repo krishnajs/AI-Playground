@@ -57,6 +57,24 @@ fi
 # Store the PID so users can kill the stack from another terminal if needed.
 PID_FILE="/tmp/aipg-electron.pid"
 
+# Kill any previous instance of this app (electron + python backends)
+_kill_previous() {
+  local prev_pid
+  prev_pid="$(cat "$PID_FILE" 2>/dev/null)"
+  if [ -n "$prev_pid" ] && kill -0 "$prev_pid" 2>/dev/null; then
+    echo "  Stopping previous session (PID $prev_pid)..."
+    kill "$prev_pid" 2>/dev/null || true
+  fi
+  # Kill all subprocesses spawned from this repo regardless of PID file
+  pkill -f "${SCRIPT_DIR}/WebUI/node_modules/electron" 2>/dev/null || true
+  pkill -f "${SCRIPT_DIR}/service.*web_api\.py" 2>/dev/null || true
+  pkill -f "${SCRIPT_DIR}/ComfyUI.*main\.py" 2>/dev/null || true
+  pkill -f "${SCRIPT_DIR}/LlamaCPP.*llama-server" 2>/dev/null || true
+  rm -f "$PID_FILE"
+  sleep 1
+}
+_kill_previous
+
 cleanup() {
   echo ""
   echo "  Shutting down AI Playground..."
@@ -65,6 +83,11 @@ cleanup() {
     kill "$NPM_PID" 2>/dev/null || true
     wait "$NPM_PID" 2>/dev/null || true
   fi
+  # Kill all spawned subprocesses
+  pkill -f "${SCRIPT_DIR}/WebUI/node_modules/electron" 2>/dev/null || true
+  pkill -f "${SCRIPT_DIR}/service.*web_api\.py" 2>/dev/null || true
+  pkill -f "${SCRIPT_DIR}/ComfyUI.*main\.py" 2>/dev/null || true
+  pkill -f "${SCRIPT_DIR}/LlamaCPP.*llama-server" 2>/dev/null || true
   rm -f "$PID_FILE"
   echo "  Done. Goodbye."
 }
