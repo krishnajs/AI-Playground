@@ -67,7 +67,7 @@ export class LlamaCppBackendService implements ApiService {
   // Logger
   readonly appLogger = appLoggerInstance
 
-  private version = 'b7278'
+  private version = 'b8708'
 
   private llamaCppParametersString: string = LLAMACPP_DEFAULT_PARAMETERS
 
@@ -89,7 +89,12 @@ export class LlamaCppBackendService implements ApiService {
     this.serviceDir = path.resolve(path.join(this.baseDir, 'LlamaCPP'))
     this.llamaCppDir = path.resolve(path.join(this.serviceDir, 'llama-cpp'))
     this.llamaCppExePath = path.resolve(path.join(this.llamaCppDir, binary('llama-server')))
-    this.zipPath = path.resolve(path.join(this.serviceDir, `llama-cpp.${platformExtension}`))
+    // On Linux use a platform-qualified archive name so an existing CPU-only tarball
+    // (llama-cpp.tar.gz) is never mistaken for the GPU/Vulkan build.
+    const zipFileName = process.platform === 'linux'
+      ? `llama-cpp-linux.${platformExtension}`
+      : `llama-cpp.${platformExtension}`
+    this.zipPath = path.resolve(path.join(this.serviceDir, zipFileName))
 
     // Check if already set up
     this.isSetUp = this.serviceIsSetUp()
@@ -463,10 +468,10 @@ export class LlamaCppBackendService implements ApiService {
   }
 
   private async downloadLlamacpp(): Promise<void> {
-    const linuxArch = (await this.linuxHasVulkan()) ? 'linux-vulkan-x64' : 'ubuntu-x64'
+    const linuxArch = (await this.linuxHasVulkan()) ? 'ubuntu-vulkan-x64' : 'ubuntu-x64'
     if (process.platform === 'linux') {
       this.appLogger.info(
-        `Linux Vulkan ${linuxArch === 'linux-vulkan-x64' ? 'detected — using GPU build' : 'not found — using CPU-only build'}`,
+        `Linux Vulkan ${linuxArch === 'ubuntu-vulkan-x64' ? 'detected — using GPU build' : 'not found — using CPU-only build'}`,
         this.name,
       )
     }
@@ -479,22 +484,39 @@ export class LlamaCppBackendService implements ApiService {
     const downloadUrl = `https://github.com/ggml-org/llama.cpp/releases/download/${this.version}/llama-${this.version}-bin-${platformArch}.${platformExtension}`
     this.appLogger.info(`Downloading Llamacpp from ${downloadUrl}`, this.name)
 
-    // Delete existing zip if it exists
-    if (filesystem.existsSync(this.zipPath)) {
-      this.appLogger.info(`Removing existing Llamacpp zip file`, this.name)
-      filesystem.removeSync(this.zipPath)
+    // If zip already present (pre-downloaded manually, useful behind proxies), reuse it
+    if (filesystem.existsSync(this.zipPath) && filesystem.statSync(this.zipPath).size > 0) {
+      this.appLogger.info(`Reusing pre-downloaded Llamacpp zip at ${this.zipPath}`, this.name)
+      return
     }
 
     // Using electron net for better proxy support
-    const response = await net.fetch(downloadUrl)
-    if (!response.ok || response.status !== 200 || !response.body) {
-      throw new Error(`Failed to download Llamacpp: ${response.statusText}`)
+    try {
+      const response = await net.fetch(downloadUrl)
+      if (!response.ok || response.status !== 200 || !response.body) {
+        throw new Error(`HTTP ${response.status} ${response.statusText}`)
+      }
+      const buffer = await response.arrayBuffer()
+      await filesystem.writeFile(this.zipPath, Buffer.from(buffer))
+      this.appLogger.info(`Llamacpp zip file downloaded successfully`, this.name)
+    } catch (err) {
+      this.appLogger.warn(
+        `net.fetch failed (${err}), falling back to curl (respects HTTPS_PROXY)`,
+        this.name,
+      )
+      const { spawnSync } = await import('child_process')
+      const result = spawnSync(
+        'curl',
+        ['--fail', '--location', '--silent', '--show-error', '-o', this.zipPath, downloadUrl],
+        { stdio: 'pipe' },
+      )
+      if (result.status !== 0) {
+        throw new Error(
+          `Failed to download Llamacpp via curl: ${result.stderr?.toString() ?? 'unknown error'}`,
+        )
+      }
+      this.appLogger.info(`Llamacpp zip downloaded via curl fallback`, this.name)
     }
-
-    const buffer = await response.arrayBuffer()
-    await filesystem.writeFile(this.zipPath, Buffer.from(buffer))
-
-    this.appLogger.info(`Llamacpp zip file downloaded successfully`, this.name)
   }
 
   private async extractLlamacpp(): Promise<void> {

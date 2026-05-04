@@ -139,8 +139,7 @@ triton-xpu = [
 insightface = [
   { url = "https://github.com/TNG/AI-Playground/releases/download/insightface-0.7.3/insightface-0.7.3-cp312-cp312-macosx_11_0_arm64.whl", marker = "sys_platform == 'darwin'" },
   { url = "https://github.com/Gourieff/Assets/raw/main/Insightface/insightface-0.7.3-cp312-cp312-win_amd64.whl", marker = "sys_platform == 'win32'" },
-  # Linux: build from source via PyPI (requires cmake and a C++ compiler)
-  { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
+  # Linux: built from source via default PyPI (requires cmake and a C++ compiler)
 ]
 
 [[tool.uv.index]]

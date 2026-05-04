@@ -24,7 +24,7 @@ const globalDefaultSettings = {
   height: 512,
   inferenceSteps: 6,
   resolution: '704x384',
-  batchSize: 4,
+  batchSize: 1,
   negativePrompt: 'nsfw',
 }
 
@@ -659,7 +659,8 @@ function getToolDefinition() {
           ),
         batchSize: z
           .number()
-          .describe('Number of images to generate. Use 1 if not explicitly specified by the user.'),
+          .optional()
+          .describe('Only set if user explicitly asks for multiple images, otherwise omit (defaults to 1).'),
       }),
     }
   }
@@ -777,7 +778,8 @@ function getToolDefinition() {
         ),
       batchSize: z
         .number()
-        .describe('Number of images to generate. Use 1 if not explicitly specified by the user.'),
+        .optional()
+        .describe('Only set if user explicitly asks for multiple images, otherwise omit (defaults to 1).'),
     }),
   }
 }

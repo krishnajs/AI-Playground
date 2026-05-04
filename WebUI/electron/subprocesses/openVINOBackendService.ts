@@ -83,7 +83,7 @@ export class OpenVINOBackendService implements ApiService {
     // Set up paths
     this.serviceDir = path.resolve(path.join(this.baseDir, 'OpenVINO'))
     this.ovmsDir = path.resolve(path.join(this.serviceDir, 'ovms'))
-    const ovmsExe = process.platform === 'win32' ? 'ovms.exe' : 'ovms'
+    const ovmsExe = process.platform === 'win32' ? 'ovms.exe' : path.join('bin', 'ovms')
     this.ovmsExePath = path.resolve(path.join(this.ovmsDir, ovmsExe))
     const archiveExt = process.platform === 'win32' ? 'ovms.zip' : 'ovms.tar.gz'
     this.zipPath = path.resolve(path.join(this.serviceDir, archiveExt))
@@ -244,6 +244,12 @@ export class OpenVINOBackendService implements ApiService {
             path.join(this.pythonEnvDir, process.platform === 'win32' ? 'Scripts' : 'bin'),
             process.env.PATH,
           ].join(path.delimiter),
+          // On Linux, OpenVINO needs Level Zero & GPU libs from /usr/lib/x86_64-linux-gnu
+          ...(process.platform !== 'win32' && {
+            LD_LIBRARY_PATH: ['/usr/lib/x86_64-linux-gnu', process.env.LD_LIBRARY_PATH ?? '']
+              .filter(Boolean)
+              .join(':'),
+          }),
         },
       })
 
@@ -327,7 +333,10 @@ export class OpenVINOBackendService implements ApiService {
           ...process.env,
           OVMS_DIR: this.ovmsDir,
           PYTHONHOME: pythonDir,
-          PATH: [this.ovmsDir, pythonDir, scriptsDir, process.env.PATH].join(path.delimiter),
+          PATH: [path.join(this.ovmsDir, 'bin'), this.ovmsDir, pythonDir, scriptsDir, process.env.PATH].join(path.delimiter),
+          ...(process.platform !== 'win32' && {
+            LD_LIBRARY_PATH: [path.join(this.ovmsDir, 'lib'), process.env.LD_LIBRARY_PATH ?? ''].filter(Boolean).join(':'),
+          }),
         },
       })
 
@@ -501,6 +510,15 @@ export class OpenVINOBackendService implements ApiService {
     try {
       const result = await execAsync(`"${this.ovmsExePath}" --version`, {
         timeout: 5000,
+        env: {
+          ...process.env,
+          // On Linux, OVMS shared libs (libtbb, libopenvino, etc.) live in ovmsDir/lib
+          ...(process.platform !== 'win32' && {
+            LD_LIBRARY_PATH: [path.join(this.ovmsDir, 'lib'), process.env.LD_LIBRARY_PATH ?? '']
+              .filter(Boolean)
+              .join(':'),
+          }),
+        },
       })
       // Parse output like "OpenVINO backend 2025.4.0.0rc3"
       const versionMatch = result.stdout.match(/OpenVINO backend\s+([\d.]+(?:rc\d+)?)/)
@@ -950,7 +968,10 @@ export class OpenVINOBackendService implements ApiService {
           ...process.env,
           OVMS_DIR: this.ovmsDir,
           PYTHONHOME: pythonDir,
-          PATH: [this.ovmsDir, pythonDir, scriptsDir, process.env.PATH].join(path.delimiter),
+          PATH: [path.join(this.ovmsDir, 'bin'), this.ovmsDir, pythonDir, scriptsDir, process.env.PATH].join(path.delimiter),
+          ...(process.platform !== 'win32' && {
+            LD_LIBRARY_PATH: [path.join(this.ovmsDir, 'lib'), process.env.LD_LIBRARY_PATH ?? ''].filter(Boolean).join(':'),
+          }),
         },
       })
 
@@ -1085,7 +1106,10 @@ export class OpenVINOBackendService implements ApiService {
           ...process.env,
           OVMS_DIR: this.ovmsDir,
           PYTHONHOME: pythonDir,
-          PATH: [this.ovmsDir, pythonDir, scriptsDir, process.env.PATH].join(path.delimiter),
+          PATH: [path.join(this.ovmsDir, 'bin'), this.ovmsDir, pythonDir, scriptsDir, process.env.PATH].join(path.delimiter),
+          ...(process.platform !== 'win32' && {
+            LD_LIBRARY_PATH: [path.join(this.ovmsDir, 'lib'), process.env.LD_LIBRARY_PATH ?? ''].filter(Boolean).join(':'),
+          }),
         },
       })
 
@@ -1222,7 +1246,10 @@ export class OpenVINOBackendService implements ApiService {
           ...process.env,
           OVMS_DIR: this.ovmsDir,
           PYTHONHOME: pythonDir,
-          PATH: [this.ovmsDir, pythonDir, scriptsDir, process.env.PATH].join(path.delimiter),
+          PATH: [path.join(this.ovmsDir, 'bin'), this.ovmsDir, pythonDir, scriptsDir, process.env.PATH].join(path.delimiter),
+          ...(process.platform !== 'win32' && {
+            LD_LIBRARY_PATH: [path.join(this.ovmsDir, 'lib'), process.env.LD_LIBRARY_PATH ?? ''].filter(Boolean).join(':'),
+          }),
         },
       })
 

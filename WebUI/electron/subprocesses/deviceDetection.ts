@@ -1,5 +1,5 @@
 export function levelZeroDeviceSelectorEnv(id?: string): { ONEAPI_DEVICE_SELECTOR: string } {
-  return { ONEAPI_DEVICE_SELECTOR: `level_zero:${id ?? '*'}` }
+  return { ONEAPI_DEVICE_SELECTOR: `level_zero:${id ?? '0'}` }
 }
 
 /** Restrict PyTorch/CUDA to one GPU. Omit when id is auto (`*` or undefined) so all devices stay visible. */
