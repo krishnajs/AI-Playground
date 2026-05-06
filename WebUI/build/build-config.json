@@ -27,22 +27,6 @@
       "to": "comfyui-deps"
     },
     {
-      "from": "../build/resources/7zr.exe",
-      "to": "7zr.exe"
-    },
-    {
-      "from": "../build/resources/uv.exe",
-      "to": "uv.exe"
-    },
-    {
-      "from": "../build/resources/xpu-smi.exe",
-      "to": "device-service/xpu-smi.exe"
-    },
-    {
-      "from": "../build/resources/xpum.dll",
-      "to": "device-service/xpum.dll"
-    },
-    {
       "from": "external/backend-versions.json",
       "to": "backend-versions.json"
     },
@@ -104,6 +88,24 @@
         "arch": ["x64"]
       }
     ],
+    "extraResources": [
+      {
+        "from": "../build/resources/7zr.exe",
+        "to": "7zr.exe"
+      },
+      {
+        "from": "../build/resources/uv.exe",
+        "to": "uv.exe"
+      },
+      {
+        "from": "../build/resources/xpu-smi.exe",
+        "to": "device-service/xpu-smi.exe"
+      },
+      {
+        "from": "../build/resources/xpum.dll",
+        "to": "device-service/xpum.dll"
+      }
+    ],
     "verifyUpdateCodeSignature": false,
     "requestedExecutionLevel": "asInvoker",
     "icon": "app.ico",
@@ -117,5 +119,40 @@
     "allowToChangeInstallationDirectory": true,
     "deleteAppDataOnUninstall": true,
     "allowElevation": true
+  },
+  "linux": {
+    "target": [
+      {
+        "target": "AppImage",
+        "arch": ["x64"]
+      },
+      {
+        "target": "deb",
+        "arch": ["x64"]
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "../build/resources/7zr",
+        "to": "7zr"
+      },
+      {
+        "from": "../build/resources/uv",
+        "to": "uv"
+      }
+    ],
+    "icon": "app.png",
+    "artifactName": "${productName}-${version}.${ext}",
+    "category": "Utility"
+  },
+  "deb": {
+    "depends": [
+      "libdbus-1-3",
+      "libgtk-3-0",
+      "libnss3",
+      "libasound2",
+      "pciutils",
+      "python3"
+    ]
   }
 }

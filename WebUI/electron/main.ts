@@ -167,6 +167,17 @@ const modesDir = path.resolve(
     ? path.join(process.resourcesPath, 'modes')
     : path.join(__dirname, '../../../modes/'),
 )
+// On Linux with Xvfb or headless display, Electron's Chromium renderer cannot
+// use hardware GPU acceleration and will crash with "GPU process isn't usable".
+// Disable hardware acceleration so the software rasterizer is used instead.
+// This does NOT affect AI/compute workloads — those use Level Zero/SYCL directly.
+if (process.platform === 'linux') {
+  app.disableHardwareAcceleration()
+  app.commandLine.appendSwitch('disable-gpu')
+  app.commandLine.appendSwitch('disable-software-rasterizer', 'false')
+  app.commandLine.appendSwitch('no-sandbox')
+}
+
 const singleInstanceLock = app.requestSingleInstanceLock()
 
 const appLogger = appLoggerInstance
@@ -621,16 +632,31 @@ app.on('quit', async () => {
     app.releaseSingleInstanceLock()
   }
 })
-// Quit when all windows are closed, except on macOS. There, it's common
-// for applications and their menu bar to stay active until the user quits
-// explicitly with Cmd + Q.
-app.on('window-all-closed', async () => {
+
+async function shutdownServicesAndQuit() {
   try {
     await stopAllMcpServers()
     await serviceRegistry?.stopAllServices()
   } catch {}
+  app.quit()
+}
+
+// Quit when all windows are closed, except on macOS and Linux.
+// - macOS: apps stay active until Cmd+Q (standard macOS behavior).
+// - Linux: keep services running when the window is closed so the user can
+//   reconnect via browser (http://localhost:25413) without losing AI sessions.
+//   Use Ctrl+C / SIGTERM in the terminal to fully quit.
+app.on('window-all-closed', async () => {
+  if (process.platform === 'linux') {
+    appLogger.info(
+      'Window closed — AI services continue running. Open http://localhost:25413 to reconnect. Press Ctrl+C in the terminal to quit.',
+      'electron-backend',
+    )
+    win = null
+    return
+  }
   if (process.platform !== 'darwin') {
-    app.quit()
+    await shutdownServicesAndQuit()
     win = null
   }
 })
@@ -1731,8 +1757,12 @@ function needAdminPermission() {
     fs.writeFile(filename, '', (err) => {
       if (err) {
         if (err && err.code == 'EPERM') {
-          if (path.parse(externalRes).root == path.parse(process.env.windir!).root) {
+          // windir is only defined on Windows; on Linux/macOS this check is not needed
+          if (process.platform === 'win32' && process.env.windir &&
+              path.parse(externalRes).root == path.parse(process.env.windir).root) {
             resolve(!isAdmin())
+          } else {
+            resolve(false)
           }
         } else {
           resolve(false)
@@ -1800,19 +1830,51 @@ app.whenReady().then(async () => {
 
     // Custom protocol docking is file protocol
     protocol.handle('aipg-media', async (request) => {
-      console.log('request', request)
       const decodedUrl = decodeURIComponent(
         request.url.replace(new RegExp(`^aipg-media://`, 'i'), '/'),
       )
 
       const fullPath = path.join(mediaDir, decodedUrl)
+      let normalizedPath = path.normalize(fullPath.replace(/(\/|\\)$/, ''))
 
-      const normalizedPath = path.normalize(fullPath.replace(/(\/|\\)$/, ''))
+      // On case-sensitive filesystems (Linux), Chromium lowercases the URL host
+      // for `standard` schemes, so the on-disk filename (e.g. `AIPG_Image_00001_.png`)
+      // won't match the lowercased URL. Fall back to a case-insensitive lookup.
+      if (!fs.existsSync(normalizedPath)) {
+        try {
+          const dir = path.dirname(normalizedPath)
+          const target = path.basename(normalizedPath).toLowerCase()
+          if (fs.existsSync(dir)) {
+            const match = fs.readdirSync(dir).find((entry) => entry.toLowerCase() === target)
+            if (match) {
+              normalizedPath = path.join(dir, match)
+            }
+          }
+        } catch (e) {
+          appLogger.error(
+            `aipg-media case-insensitive lookup failed: ${e}`,
+            'electron-backend',
+          )
+        }
+      }
+
       const response = await net.fetch(`file://${normalizedPath}`)
       return response
     })
     const window = await createWindow()
     await initServiceRegistry(window, settings)
     spawnLangchainUtilityProcess()
+
+    // On Linux: handle SIGINT (Ctrl+C) and SIGTERM for clean shutdown.
+    // These are the correct way to quit when the window-all-closed event
+    // no longer auto-quits (services stay running after window close).
+    if (process.platform === 'linux') {
+      const handleShutdownSignal = (signal: string) => {
+        appLogger.info(`Received ${signal} — shutting down AI services...`, 'electron-backend')
+        shutdownServicesAndQuit()
+      }
+      process.on('SIGINT', () => handleShutdownSignal('SIGINT'))
+      process.on('SIGTERM', () => handleShutdownSignal('SIGTERM'))
+    }
   }
 })

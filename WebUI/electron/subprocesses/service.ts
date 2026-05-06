@@ -292,7 +292,7 @@ abstract class ExecutableService extends GenericServiceImpl {
         exePath,
         args,
         (data) => this.log(data),
-        { ...extraEnv, PIP_CONFIG_FILE: 'nul' },
+        { ...extraEnv, PIP_CONFIG_FILE: process.platform === 'win32' ? 'nul' : '/dev/null' },
         workDir,
       )
     } catch (error) {
@@ -429,7 +429,11 @@ export class GitService extends ExecutableService {
 
   private async unzipGit(): Promise<void> {
     try {
-      await exec(`"${this.unzipExePath}" x "${this.zipPath}" -o"${this.dir}"`)
+      // Use execFile instead of exec to bypass cmd.exe shell quoting issues
+      // on Windows paths that contain spaces (e.g. "New folder").
+      // exec routes through cmd.exe /s /c which corrupts quoted arguments.
+      const execFile = promisify(childProcess.execFile)
+      await execFile(this.unzipExePath, ['x', this.zipPath, `-o${this.dir}`, '-y'])
       this.log('Unzipping git archive successful')
     } catch (error) {
       throw new Error(`Unzip error: ${error}`)
