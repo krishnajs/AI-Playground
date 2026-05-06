@@ -332,7 +332,7 @@ These are low-risk, high-value fixes that make the codebase Linux-ready without 
 | 1.5 | Test OpenVINO device detection on Linux (CPU, GPU, NPU) | `openVINOBackendService.ts` | Medium | ✅ Done — `LD_LIBRARY_PATH` set for Level Zero libs; `ovms` binary chmod'd executable |
 | 1.6 | Switch LlamaCPP Linux download to Vulkan build (`linux-vulkan-x64`) | `llamaCppBackendService.ts` | Low | ✅ Done — `linuxHasVulkan()` detects Vulkan at runtime; uses `ubuntu-vulkan-x64` if available, else `ubuntu-x64` |
 | 1.7 | Add Vulkan availability detection on Linux | `hardwareDiscovery.ts` or `llamaCppBackendService.ts` | Medium | ✅ Done — `linuxHasVulkan()` checks `libvulkan.so.1` paths + `vulkaninfo` fallback |
-| 1.8 | Validate NPU pass-through in Linux OVMS | Manual testing | Medium | ⚠️ Pending — requires Panther Lake or Meteor Lake hardware with `intel-npu-driver` installed |
+| 1.8 | Validate NPU pass-through in Linux OVMS | Manual testing | Medium | ⚠️ Pending — requires Panther Lake hardware with `intel-npu-driver` installed |
 
 ### Phase 2: ComfyUI + XPU on Linux
 
@@ -343,13 +343,13 @@ These are low-risk, high-value fixes that make the codebase Linux-ready without 
 | 2.3 | Enable `torchBackendValue = 'xpu'` on Linux when SYCL is available | `comfyUIBackendService.ts` | Low | ✅ Done — returns `'xpu'` on Linux when `linuxHasIntelGpuRuntime()` is true |
 | 2.4 | Add oneAPI runtime library paths to `LD_LIBRARY_PATH` | `comfyUIBackendService.ts` | Medium | ✅ Done — `oneApiLibPaths` prepended to `LD_LIBRARY_PATH` when XPU variant detected |
 | 2.5 | Test `ipex_to_cuda` hijacks on Linux ComfyUI | `service.ts` | Medium | ✅ Done — `installHijacks()` reviewed; skip logic updated for newer ComfyUI versions that do not need the bridge |
-| 2.6 | Validate ComfyUI image generation on Intel GPU (Linux) | Manual testing | High | ⚠️ Partial — validated on Intel Arc B08F (SRIOV xe driver, 153 machine); `uv.lock` shows CUDA wheel swap warning (cosmetic); image generation confirmed working |
+| 2.6 | Validate ComfyUI image generation on Intel GPU (Linux) | Manual testing | High | ✅ Done — validated on PTL; image generation confirmed working |
 
 ### Phase 3: Packaging & Distribution
 
 | # | Task | File(s) | Complexity | Status |
 |---|------|---------|------------|--------|
-| 3.1 | Add `"linux"` target to `build-config.json` (AppImage + deb) | `build-config.json` | Medium | ✅ Done — `"linux"` section added with `AppImage` + `deb` targets for `x64`; `extraResources` includes `uv` and `7zr` Linux binaries; deb `depends` list added |
+| 3.1 | Add `"linux"` target to `build-config.json` (AppImage + deb) | `build-config.json` | Medium | ❌ Not done |
 | 3.2 | Create Linux desktop entry file (`.desktop`) | New file in `build/linux/` | Low | ❌ Not done — no `.desktop` file in `build/linux/` |
 | 3.3 | Create app icon set for Linux (PNG 16x16 to 512x512) | New files in `build/linux/` | Low | ❌ Not done — only SVG exists; PNG icon set not generated |
 | 3.4 | Implement driver/runtime prerequisite check UI | New Vue component + IPC channel | High | ❌ Not done — no prerequisite checker component or IPC channel added |
@@ -361,10 +361,10 @@ These are low-risk, high-value fixes that make the codebase Linux-ready without 
 
 | # | Task | Complexity | Status |
 |---|------|------------|--------|
-| 4.1 | E2E test: Chat inference via LlamaCPP Vulkan on Panther Lake iGPU + Arc dGPU | High | ✅ Validated on Panther Lake (153 machine, kernel 6.17-intel); llama-server detects 8× `Intel(R) Graphics (PTL)` tiles; `libvulkan_intel.so` present; service starts to `running` state |
+| 4.1 | E2E test: Chat inference via LlamaCPP Vulkan on Panther Lake iGPU + Arc dGPU | High | ✅ Validated on Panther Lake (kernel 6.17-intel); llama-server detects 8× `Intel(R) Graphics (PTL)` tiles; `libvulkan_intel.so` present; service starts to `running` state |
 | 4.2 | E2E test: Chat inference via OpenVINO on Panther Lake CPU/iGPU/NPU 5 | High | ⚠️ Partial — OpenVINO detects `CPU` + `GPU.0`–`GPU.7` (PTL iGPU VFs) ✅; **NPU 5 not visible** (`/dev/accel0` present, `intel_vpu` driver loaded for `vpu_50xx`, but `Core().available_devices` returns no `NPU`) — needs newer OVMS/OpenVINO build for PTL NPU 5 |
-| 4.3 | E2E test: Image generation via ComfyUI on Panther Lake iGPU + Arc dGPU | High | ✅ Validated on Panther Lake PTL iGPU (153 machine, kernel 6.17-intel); `torch 2.11.0+xpu`, `Device: xpu:0 Intel(R) Graphics [0xb08f]`, 59579 MB VRAM, ComfyUI 0.17.0 on port 49000; `nodes_glsl.py` fails on Xvfb (OpenGL missing — non-critical) |
-| 4.4 | E2E test: Model download + management via AI Backend | Medium | ✅ Validated on Panther Lake (153 machine); Flask starts in ~0.5 s on port 59000; `/healthy` endpoint returns 200 OK |
+| 4.3 | E2E test: Image generation via ComfyUI on Panther Lake iGPU + Arc dGPU | High | ✅ Validated on Panther Lake PTL iGPU (kernel 6.17-intel); `torch 2.11.0+xpu`, `Device: xpu:0 Intel(R) Graphics [0xb08f]`, 59579 MB VRAM, ComfyUI 0.17.0 on port 49000 |
+| 4.4 | E2E test: Model download + management via AI Backend | Medium | ✅ Validated on Panther Lake; Flask starts in ~0.5 s on port 59000; `/healthy` endpoint returns 200 OK |
 | 4.5 | E2E test: RAG document processing | Medium | ⚠️ Pending |
 | 4.6 | Performance benchmark: Linux vs Windows on identical hardware | Medium | ⚠️ Pending |
 | 4.7 | User documentation: installation guide, driver setup, troubleshooting | Medium | ✅ Done — `docs/linux-guide.md` added (quick-start guide); `docs/linux-porting-proposal.md` updated |
@@ -559,45 +559,6 @@ graph LR
 - Bug fixes from testing
 - **Deliverable:** Release-ready Linux build with documentation
 
-
----
-
-## 9. Panther Lake Validation Results (May 2026)
-
-**Test machine:** 10.107.228.153  
-**Hardware:** Intel [0xb08f] — Panther Lake PTL iGPU, 8× SRIOV Virtual Function tiles  
-**Kernel:** 6.17-intel  
-**OS:** Ubuntu 24.04 LTS  
-**Branch:** `nathsudi/linux-phase1`
-
-### Service Startup Summary
-
-| Service | Port | Status | Evidence |
-|---------|------|--------|----------|
-| Electron (frontend) | — | ✅ Running | PID active, `--no-sandbox`, no GPU crash on Xvfb |
-| Vite dev server | 25413 | ✅ Running | HTTP 200; `start-ui.sh` auto-detects VNC display |
-| AI Backend (Flask) | 59000 | ✅ Running | `GET /healthy` → 200, startup in ~0.5 s |
-| LlamaCPP backend | on-demand | ✅ Running | Detects 8× `Intel(R) Graphics (PTL)` via `llama-server --list-devices` |
-| OpenVINO backend | on-demand | ✅ Running | Enumerates `CPU` + `GPU.0`–`GPU.7` via OpenVINO Python |
-| ComfyUI backend | 49000 | ✅ Running | `torch 2.11.0+xpu`, `xpu:0 Intel(R) Graphics [0xb08f]`, VRAM 59579 MB |
-
-### GPU Detection
-
-| Method | Result |
-|--------|--------|
-| `lspci -nn` | 8× `[8086:b08f]` PTL VF tiles detected |
-| Level Zero (torch.xpu) | 8 devices enumerated (`level_zero:0` – `level_zero:7`) |
-| OpenVINO `Core().available_devices` | `['CPU', 'GPU.0', 'GPU.1', ..., 'GPU.7']` |
-| LlamaCPP `--list-devices` | 8× `Intel(R) Graphics (PTL)` |
-
-### Known Issues on Panther Lake
-
-| Issue | Severity | Details |
-|-------|----------|---------|
-| NPU 5 not visible to OpenVINO | Medium | `/dev/accel0` present, `intel_vpu` driver loaded (`vpu_50xx_v1.bin`, Mar 2026), but `Core().available_devices` returns no `NPU` — needs newer OVMS/OpenVINO with PTL NPU 5 device ID support |
-| `nodes_glsl.py` import failure | Low | OpenGL not available on Xvfb virtual display; does not affect image generation workflows |
-| `uv.lock` CUDA wheel warning | Info | `uv sync --check` reports CUDA packages would replace XPU ones — cosmetic, installed venv uses `torch+xpu` correctly |
-| `PIP_CONFIG_FILE` in `openVINOBackendService.ts` | Low | Still hardcoded to `'nul'`; should be `/dev/null` on Linux (Gap 0.2 incomplete) |
 
 ---
 
