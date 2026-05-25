@@ -174,7 +174,9 @@ const modesDir = path.resolve(
 if (process.platform === 'linux') {
   app.disableHardwareAcceleration()
   app.commandLine.appendSwitch('disable-gpu')
-  app.commandLine.appendSwitch('disable-software-rasterizer', 'false')
+  // Keep the software rasterizer enabled (do NOT pass --disable-software-rasterizer).
+  // Chromium's appendSwitch(name, 'false') does NOT unset a flag — it sets the
+  // switch with the literal value "false" which still disables the rasterizer.
   app.commandLine.appendSwitch('no-sandbox')
 }
 

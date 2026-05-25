@@ -34,6 +34,19 @@ if [ "$NODE_MAJOR" -lt 22 ]; then
   exit 1
 fi
 
+# ── proxy propagation ───────────────────────────────────────────────────────
+# Electron's postinstall (@electron/get + got) does NOT pick up the npm proxy
+# nor the lowercase `https_proxy` env var reliably. Forward whatever the user
+# has set so corporate proxies (e.g. Intel's proxy-dmz) keep working.
+if [ -n "${https_proxy:-${HTTPS_PROXY:-}}" ]; then
+  export HTTPS_PROXY="${https_proxy:-$HTTPS_PROXY}"
+  export HTTP_PROXY="${http_proxy:-${HTTP_PROXY:-$HTTPS_PROXY}}"
+  export GLOBAL_AGENT_HTTPS_PROXY="$HTTPS_PROXY"
+  export GLOBAL_AGENT_HTTP_PROXY="$HTTP_PROXY"
+  export GLOBAL_AGENT_NO_PROXY="${no_proxy:-${NO_PROXY:-localhost,127.0.0.1}}"
+  echo "INFO: forwarding HTTPS_PROXY=$HTTPS_PROXY to child processes"
+fi
+
 if [ ! -d "$WEBUI_DIR/node_modules" ]; then
   echo "INFO: node_modules not found — running npm install..."
   cd "$WEBUI_DIR" && npm install --legacy-peer-deps
