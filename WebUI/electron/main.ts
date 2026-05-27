@@ -643,20 +643,10 @@ async function shutdownServicesAndQuit() {
   app.quit()
 }
 
-// Quit when all windows are closed, except on macOS and Linux.
+// Quit when all windows are closed, except on macOS.
 // - macOS: apps stay active until Cmd+Q (standard macOS behavior).
-// - Linux: keep services running when the window is closed so the user can
-//   reconnect via browser (http://localhost:25413) without losing AI sessions.
-//   Use Ctrl+C / SIGTERM in the terminal to fully quit.
+// - Linux/Windows: close window => stop services and quit app (parity behavior).
 app.on('window-all-closed', async () => {
-  if (process.platform === 'linux') {
-    appLogger.info(
-      'Window closed — AI services continue running. Open http://localhost:25413 to reconnect. Press Ctrl+C in the terminal to quit.',
-      'electron-backend',
-    )
-    win = null
-    return
-  }
   if (process.platform !== 'darwin') {
     await shutdownServicesAndQuit()
     win = null
@@ -1867,9 +1857,8 @@ app.whenReady().then(async () => {
     await initServiceRegistry(window, settings)
     spawnLangchainUtilityProcess()
 
-    // On Linux: handle SIGINT (Ctrl+C) and SIGTERM for clean shutdown.
-    // These are the correct way to quit when the window-all-closed event
-    // no longer auto-quits (services stay running after window close).
+    // On Linux: handle SIGINT (Ctrl+C) and SIGTERM for clean shutdown,
+    // including headless/non-interactive runs.
     if (process.platform === 'linux') {
       const handleShutdownSignal = (signal: string) => {
         appLogger.info(`Received ${signal} — shutting down AI services...`, 'electron-backend')
