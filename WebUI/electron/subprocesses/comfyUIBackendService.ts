@@ -1177,7 +1177,10 @@ except Exception as e:
     const apiProcess = spawn(pythonBinary, parameters, {
       cwd: this.serviceDir,
       windowsHide: true,
-      env: Object.assign(process.env, additionalEnvVariables),
+      // Build a fresh env object instead of mutating process.env — otherwise the
+      // injected LD_LIBRARY_PATH / device-selector vars leak into every later
+      // child process spawned from the main Electron process.
+      env: { ...process.env, ...additionalEnvVariables },
     })
 
     //must be at the same tick as the spawn function call

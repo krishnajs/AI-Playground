@@ -34,6 +34,53 @@ if [ "$NODE_MAJOR" -lt 22 ]; then
   exit 1
 fi
 
+# ── proxy propagation ───────────────────────────────────────────────────────
+# Electron's postinstall (@electron/get + got) does NOT pick up the npm proxy
+# nor the lowercase `https_proxy` env var reliably. Forward whatever the user
+# has set so corporate proxies (e.g. Intel's proxy-dmz) keep working.
+if [ -n "${https_proxy:-${HTTPS_PROXY:-}}" ]; then
+  export HTTPS_PROXY="${https_proxy:-$HTTPS_PROXY}"
+  export HTTP_PROXY="${http_proxy:-${HTTP_PROXY:-$HTTPS_PROXY}}"
+  export GLOBAL_AGENT_HTTPS_PROXY="$HTTPS_PROXY"
+  export GLOBAL_AGENT_HTTP_PROXY="$HTTP_PROXY"
+  export GLOBAL_AGENT_NO_PROXY="${no_proxy:-${NO_PROXY:-localhost,127.0.0.1}}"
+  echo "INFO: forwarding HTTPS_PROXY=$HTTPS_PROXY to child processes"
+fi
+
+# ── electron binary cache (works around @electron/get ignoring proxies) ─────
+# Electron's postinstall (`node install.js`) uses `@electron/get` → `got`,
+# which does NOT honor HTTPS_PROXY env vars reliably. The reliable workaround
+# is to pre-extract the electron binary and point the installer at it via
+# ELECTRON_OVERRIDE_DIST_PATH — the postinstall then skips the network call
+# entirely. The pinned electron version is read from WebUI/package.json.
+ELECTRON_VERSION=$(node -e "console.log(require('$WEBUI_DIR/package.json').devDependencies.electron.replace(/^[^\d]*/, ''))" 2>/dev/null || echo "")
+if [ -n "$ELECTRON_VERSION" ]; then
+  ELECTRON_DIST_DIR="$HOME/.cache/electron/electron-v${ELECTRON_VERSION}-linux-x64"
+  ELECTRON_ZIP="$HOME/.cache/electron/electron-v${ELECTRON_VERSION}-linux-x64.zip"
+  if [ ! -x "$ELECTRON_DIST_DIR/electron" ] && [ -f "$ELECTRON_ZIP" ]; then
+    echo "INFO: extracting cached electron zip → $ELECTRON_DIST_DIR"
+    mkdir -p "$ELECTRON_DIST_DIR"
+    (cd "$ELECTRON_DIST_DIR" && unzip -oq "$ELECTRON_ZIP")
+  fi
+  if [ ! -x "$ELECTRON_DIST_DIR/electron" ] && command -v curl >/dev/null 2>&1; then
+    echo "INFO: downloading electron v${ELECTRON_VERSION} via curl (honors HTTPS_PROXY)"
+    mkdir -p "$(dirname "$ELECTRON_ZIP")" "$ELECTRON_DIST_DIR"
+    if curl -fL --retry 3 --connect-timeout 30 \
+        "https://github.com/electron/electron/releases/download/v${ELECTRON_VERSION}/electron-v${ELECTRON_VERSION}-linux-x64.zip" \
+        -o "$ELECTRON_ZIP"; then
+      (cd "$ELECTRON_DIST_DIR" && unzip -oq "$ELECTRON_ZIP")
+    else
+      echo "WARN: curl download of electron failed; postinstall will retry"
+      rm -f "$ELECTRON_ZIP"
+    fi
+  fi
+  if [ -x "$ELECTRON_DIST_DIR/electron" ]; then
+    export ELECTRON_OVERRIDE_DIST_PATH="$ELECTRON_DIST_DIR"
+    export ELECTRON_SKIP_BINARY_DOWNLOAD=1
+    echo "INFO: ELECTRON_OVERRIDE_DIST_PATH=$ELECTRON_OVERRIDE_DIST_PATH"
+  fi
+fi
+
 if [ ! -d "$WEBUI_DIR/node_modules" ]; then
   echo "INFO: node_modules not found — running npm install..."
   cd "$WEBUI_DIR" && npm install --legacy-peer-deps
@@ -75,8 +122,22 @@ _kill_previous() {
   # Kill all processes from this repo
   local killed=0
 
-  # Kill electron processes from this directory
-  if pkill -f "${SCRIPT_DIR}/WebUI/node_modules/electron" 2>/dev/null; then
+  # Kill electron processes launched for this repo (cached electron path)
+  if pkill -f "${HOME}/.cache/electron/electron-v.*-linux-x64/electron \\. --no-sandbox" 2>/dev/null; then
+    killed=1
+  fi
+
+  # Kill vite/dev launcher processes for this repo
+  if pkill -f "${SCRIPT_DIR}/WebUI/node_modules/.bin/vite" 2>/dev/null; then
+    killed=1
+  fi
+  if pkill -f "${SCRIPT_DIR}/WebUI/node_modules/.bin/cross-env" 2>/dev/null; then
+    killed=1
+  fi
+  if pkill -f "xvfb-run -a --server-args=-screen 0 1280x800x24 npm run dev" 2>/dev/null; then
+    killed=1
+  fi
+  if pkill -f "npm run dev" 2>/dev/null; then
     killed=1
   fi
 
@@ -84,9 +145,6 @@ _kill_previous() {
   pkill -f "${SCRIPT_DIR}/service.*web_api\.py" 2>/dev/null || true
   pkill -f "${SCRIPT_DIR}/ComfyUI.*main\.py" 2>/dev/null || true
   pkill -f "${SCRIPT_DIR}/LlamaCPP.*llama-server" 2>/dev/null || true
-
-  # Kill npm processes in WebUI directory
-  pkill -f "npm.*${SCRIPT_DIR}/WebUI" 2>/dev/null || true
 
   if [ $killed -eq 1 ]; then
     echo "  Stopped previous instance, waiting for cleanup..."
@@ -102,7 +160,11 @@ cleanup_on_signal() {
   echo ""
   echo "  Interrupted! Shutting down AI Playground..."
   # Kill all spawned subprocesses
-  pkill -f "${SCRIPT_DIR}/WebUI/node_modules/electron" 2>/dev/null || true
+  pkill -f "${HOME}/.cache/electron/electron-v.*-linux-x64/electron \\. --no-sandbox" 2>/dev/null || true
+  pkill -f "${SCRIPT_DIR}/WebUI/node_modules/.bin/vite" 2>/dev/null || true
+  pkill -f "${SCRIPT_DIR}/WebUI/node_modules/.bin/cross-env" 2>/dev/null || true
+  pkill -f "xvfb-run -a --server-args=-screen 0 1280x800x24 npm run dev" 2>/dev/null || true
+  pkill -f "npm run dev" 2>/dev/null || true
   pkill -f "${SCRIPT_DIR}/service.*web_api\.py" 2>/dev/null || true
   pkill -f "${SCRIPT_DIR}/ComfyUI.*main\.py" 2>/dev/null || true
   pkill -f "${SCRIPT_DIR}/LlamaCPP.*llama-server" 2>/dev/null || true
@@ -132,7 +194,18 @@ echo ""
 # Start in background and detach
 if [[ "$*" == *"--headless"* ]]; then
   # No display required — Electron is hidden; use browser to access the UI.
-  ELECTRON_NO_ATTACH_CONSOLE=1 nohup npm run dev -- --no-sandbox > /tmp/aipg-ui.log 2>&1 &
+  # NOTE: --no-sandbox is applied to electron via vite.config.mts (Linux branch),
+  # NOT passed to vite here (vite would reject it as an unknown option).
+  # Electron still needs an X server even when its window is hidden, because
+  # the renderer initializes ozone/X11. xvfb-run provides a virtual display.
+  if command -v xvfb-run >/dev/null 2>&1; then
+    ELECTRON_NO_ATTACH_CONSOLE=1 nohup xvfb-run -a --server-args="-screen 0 1280x800x24" \
+      npm run dev > /tmp/aipg-ui.log 2>&1 &
+  else
+    echo "WARNING: xvfb-run not found — electron will fail without a display."
+    echo "         Install it with: sudo apt install xvfb"
+    ELECTRON_NO_ATTACH_CONSOLE=1 nohup npm run dev > /tmp/aipg-ui.log 2>&1 &
+  fi
 else
   nohup npm run dev > /tmp/aipg-ui.log 2>&1 &
 fi
