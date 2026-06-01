@@ -14,8 +14,21 @@ Quick guide to run Intel AI Playground on Linux with full GPU acceleration.
 Install required packages:
 ```bash
 sudo apt update
-sudo apt install -y git curl build-essential python3 python3-pip python3-venv pciutils tar gzip p7zip-full
+sudo apt install -y \
+  git curl unzip jq pciutils tar gzip p7zip-full \
+  build-essential pkg-config meson ninja-build cmake \
+  python3 python3-pip python3-venv python3-dev \
+  libcairo2-dev libgirepository1.0-dev libglib2.0-dev \
+  libjpeg-dev zlib1g-dev libpng-dev libtiff-dev libwebp-dev \
+  ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswscale-dev \
+  libssl-dev libgl1
 ```
+
+> **Why so many `-dev` packages?**  uv builds several Python wheels from source on first run
+> (`pycairo`, `llvmlite`, `numpy`, image/video libs). They each need the matching system
+> headers (`pkg-config cairo`, `Python.h`, libav*, etc.). `start-ui.sh` runs a preflight
+> check and tells you exactly which apt packages are missing before the install starts —
+> install them in one go and the rest of the bring-up is unattended.
 
 ### Installation
 
@@ -121,10 +134,71 @@ ps aux | grep ComfyUI
 
 If running on a remote Linux server, create an SSH tunnel:
 ```bash
-ssh -L 25413:localhost:25413 user@remote-host
+ssh -L 25413:localhost:25413 -L 59000:localhost:59000 user@remote-host
 ```
 
-Then open http://localhost:25413 in your local browser.
+Then open **http://localhost:25413** in your local browser.
+
+> ⚠️ **Use `http://`, not `https://`.** The dev server speaks plain HTTP.
+> An `https://` URL will produce a blank page or `ERR_SSL_PROTOCOL_ERROR`.
+
+### Remote-console access (KVM / VNC / iDRAC / vSphere)
+
+When you connect over a remote console, your laptop's `localhost` is **not** the
+remote machine. You have two options:
+
+1. **Open the browser inside the remote desktop session you see over the KVM**
+   and visit `http://localhost:25413`. This is the simplest path.
+2. **SSH-tunnel as shown above** and use your laptop's local browser.
+
+The dev server binds to `127.0.0.1` only (see
+`WebUI/package.json → debug.env.VITE_DEV_SERVER_HOSTNAME`). Exposing it on
+`0.0.0.0` is possible but discouraged — Vite has no authentication.
+
+---
+
+## Recovery: ComfyUI fails with `ModuleNotFoundError` after install
+
+Symptom in the UI:
+
+```
+=== Environment Mismatch Warning ===
+Environment mismatch detected. The virtual environment at .../ComfyUI/.venv
+exists but doesn't match the expected lockfile state.
+
+ModuleNotFoundError: No module named 'yaml'    (or torch, av, etc.)
+```
+
+Meaning: `uv sync` aborted partway through (usually a missing system header —
+see prerequisites above) leaving a half-built venv. The app detects the
+mismatch but still tries to start the backend, hence the second traceback.
+
+**Fix in one shot:**
+
+```bash
+cd <repo-root>
+# 1. stop everything
+kill $(cat /tmp/aipg-electron.pid) 2>/dev/null; pkill -f electron || true
+pkill -f "AI-Playground/.*python" || true
+# 2. install the apt prereqs from the top of this guide
+# 3. wipe the broken venv + markers
+rm -rf ComfyUI/.venv comfyui-deps/.venv
+find ComfyUI -maxdepth 3 -name '.aipg-comfyui-revision*' -delete
+[ -f ComfyUI/pyproject.toml.aipg-upstream ] && \
+  mv -f ComfyUI/pyproject.toml.aipg-upstream ComfyUI/pyproject.toml
+# 4. clear uv's failed build cache so it actually retries the build
+rm -rf ~/.cache/uv/sdists-v9/pypi/pycairo ~/.cache/uv/builds-v0
+# 5. relaunch — installer runs from a clean slate
+./start-ui.sh
+```
+
+To debug a recurring failure, run `uv sync` directly so you see the real
+error instead of the truncated UI message:
+
+```bash
+cd ComfyUI
+../build/resources/uv sync --extra "$(jq -r .variant aipg-variant.json)"
+```
 
 ---
 

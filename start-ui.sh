@@ -34,6 +34,44 @@ if [ "$NODE_MAJOR" -lt 22 ]; then
   exit 1
 fi
 
+# ── native build deps preflight ─────────────────────────────────────────────
+# uv builds several Python wheels from source on first run (pycairo, llvmlite,
+# numpy, etc.). They need system headers that are NOT in a default Ubuntu
+# install. Catch them up-front so the ComfyUI install doesn't fail 5 minutes in
+# with a cryptic Meson/CMake error.
+_missing_deps=()
+command -v pkg-config        >/dev/null 2>&1 || _missing_deps+=(pkg-config)
+command -v cmake             >/dev/null 2>&1 || _missing_deps+=(cmake)
+command -v meson             >/dev/null 2>&1 || _missing_deps+=(meson)
+command -v ninja             >/dev/null 2>&1 || _missing_deps+=(ninja-build)
+command -v ffmpeg            >/dev/null 2>&1 || _missing_deps+=(ffmpeg)
+# pkg-config probes (only run if pkg-config itself is present)
+if command -v pkg-config >/dev/null 2>&1; then
+  pkg-config --exists cairo            2>/dev/null || _missing_deps+=(libcairo2-dev)
+  pkg-config --exists glib-2.0         2>/dev/null || _missing_deps+=(libglib2.0-dev)
+  pkg-config --exists libjpeg          2>/dev/null || _missing_deps+=(libjpeg-dev)
+  pkg-config --exists libpng           2>/dev/null || _missing_deps+=(libpng-dev)
+  pkg-config --exists libavformat      2>/dev/null || _missing_deps+=(libavformat-dev)
+  pkg-config --exists libavcodec       2>/dev/null || _missing_deps+=(libavcodec-dev)
+  pkg-config --exists libswscale       2>/dev/null || _missing_deps+=(libswscale-dev)
+  pkg-config --exists openssl          2>/dev/null || _missing_deps+=(libssl-dev)
+fi
+# python3-dev (Python.h) is required by many native wheels
+if ! python3 -c "import sysconfig,os,sys; sys.exit(0 if os.path.exists(sysconfig.get_path('include')+'/Python.h') else 1)" 2>/dev/null; then
+  _missing_deps+=(python3-dev)
+fi
+if [ ${#_missing_deps[@]} -gt 0 ]; then
+  # de-duplicate while preserving order
+  _unique_deps=$(printf '%s\n' "${_missing_deps[@]}" | awk '!seen[$0]++' | tr '\n' ' ')
+  echo "ERROR: missing system packages required to build Python wheels (ComfyUI deps)."
+  echo "       Install them and re-run:"
+  echo ""
+  echo "       sudo apt update && sudo apt install -y build-essential ${_unique_deps}"
+  echo ""
+  echo "       See docs/linux-guide.md → 'System prerequisites' for the full list."
+  exit 1
+fi
+
 # ── proxy propagation ───────────────────────────────────────────────────────
 # Electron's postinstall (@electron/get + got) does NOT pick up the npm proxy
 # nor the lowercase `https_proxy` env var reliably. Forward whatever the user
