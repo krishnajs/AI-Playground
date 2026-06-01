@@ -213,6 +213,8 @@ async function checkGitRefExists(gitExe: string, workDir: string, ref: string): 
 }
 
 export async function filterPartnerPresets(presetDirTargetPath: string) {
+  // Windows-only feature: Acer partner preset detection via registry
+  if (process.platform !== 'win32') return
   if (!app.isPackaged) return
   if (!fs.existsSync(presetDirTargetPath)) return
   const presets = await fs.promises.readdir(presetDirTargetPath, { withFileTypes: true })
@@ -231,6 +233,9 @@ export async function filterPartnerPresets(presetDirTargetPath: string) {
 }
 
 async function getFromRegistry(regPath: string, key: string) {
+  if (process.platform !== 'win32') {
+    return false
+  }
   const script = `
   $ErrorActionPreference = 'Stop'
   try {

@@ -67,6 +67,58 @@ export async function detectIntelGpusViaXpuSmi(): Promise<GpuHardwareDevice[]> {
   }
 }
 
+/**
+ * Detect Intel GPUs on Linux using lspci command
+ * Fallback method when xpu-smi is not available
+ */
+async function detectIntelGpusViaLspci(): Promise<GpuHardwareDevice[]> {
+  if (process.platform !== 'linux') return []
+
+  try {
+    appLogger.info('Using lspci for Intel GPU detection on Linux', 'electron-backend')
+    const out = await spawnProcessAsync(
+      'lspci',
+      ['-nn'],
+      () => {},
+      undefined,
+      undefined,
+      5000,
+    )
+
+    const devices: GpuHardwareDevice[] = []
+    const lines = out.split('\n')
+
+    for (const line of lines) {
+      // Match Intel VGA/Display controller lines
+      // Example: "00:02.0 VGA compatible controller [0300]: Intel Corporation Device [8086:7d55]"
+      if (line.includes('Intel') && (line.includes('VGA') || line.includes('Display') || line.includes('3D'))) {
+        const deviceMatch = line.match(/\[8086:([0-9a-fA-F]{4})\]/)
+        const nameMatch = line.match(/Intel Corporation (.+?) \[/)
+
+        if (deviceMatch) {
+          const devId = `0x${deviceMatch[1].toUpperCase()}`
+          const name = nameMatch ? nameMatch[1].trim() : 'Intel GPU'
+
+          devices.push({
+            device: 'INTEL_GPU_LSPCI',
+            name: name,
+            gpuDeviceId: devId,
+          })
+        }
+      }
+    }
+
+    appLogger.info(`Detected ${devices.length} Intel GPU(s) via lspci`, 'electron-backend')
+    return devices
+  } catch (e) {
+    appLogger.warn(
+      `Failed to detect Intel GPUs via lspci: ${JSON.stringify(e)}`,
+      'electron-backend',
+    )
+    return []
+  }
+}
+
 const PowerShellGpuSchema = z.array(
   z.object({
     Name: z.string(),
@@ -164,7 +216,10 @@ export async function detectGpuHardwareDevices(): Promise<{
   detected: GpuHardwareDevice[]
   hasNvidia: boolean
 }> {
-  const [intel, nvidia] = await Promise.all([detectIntelGpusViaXpuSmi(), detectNvidiaGpusViaSmi()])
+  const [intel, nvidia] = await Promise.all([
+    process.platform === 'linux' ? detectIntelGpusViaLspci() : detectIntelGpusViaXpuSmi(),
+    detectNvidiaGpusViaSmi(),
+  ])
 
   const needsFallback = intel.length === 0 || intel.every((d) => d.gpuDeviceId === null)
 

@@ -22,11 +22,25 @@ ollama-service/
 env
 llama-cpp-env/
 LlamaCPP/
+# OpenVINO build artifacts and downloads (keep source files)
 OpenVINO/ovms
 OpenVINO/ovms.zip
+OpenVINO/ovms.tar.gz
+OpenVINO/.venv/
 *env_tmp/
 *service_tmp/
 *-env/
 build-envs/
 portable-git/
 models/
+
+# Local npm configuration
+WebUI/.npmrc
+
+# Build artifacts
+WebUI/build/resources/
+WebUI/build/tmp/
+
+# Log files
+*.log
+/tmp/

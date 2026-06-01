@@ -40,6 +40,48 @@ export const COMFYUI_DEFAULT_PARAMETERS = '--lowvram --reserve-vram 6.0'
 
 const UPSTREAM_PYPROJECT_BACKUP = 'pyproject.toml.aipg-upstream'
 
+// ---------------------------------------------------------------------------
+// Linux Intel-GPU runtime detection
+// ---------------------------------------------------------------------------
+// Returns true when the host has the Level Zero / SYCL stack required to run
+// IPEX-XPU workloads. We deliberately accept either the system oneAPI install
+// (preferred) or just Level Zero loader (sufficient for torch+xpu wheels that
+// bundle SYCL runtime). Detection is filesystem-only: cheap and safe to call
+// repeatedly. Result is cached.
+let _linuxIntelGpuRuntimeCache: boolean | undefined
+const linuxIntelGpuRuntimeMarkers: string[] = [
+  // Level Zero loader (required minimum)
+  '/usr/lib/x86_64-linux-gnu/libze_loader.so.1',
+  '/usr/lib/x86_64-linux-gnu/libze_loader.so',
+  // Intel compute-runtime (Level Zero GPU driver)
+  '/usr/lib/x86_64-linux-gnu/libze_intel_gpu.so.1',
+  // oneAPI runtime SYCL libs
+  '/opt/intel/oneapi/compiler/latest/lib/libsycl.so',
+  '/opt/intel/oneapi/compiler/latest/linux/lib/libsycl.so',
+]
+function linuxHasIntelGpuRuntime(): boolean {
+  if (_linuxIntelGpuRuntimeCache !== undefined) return _linuxIntelGpuRuntimeCache
+  if (process.platform !== 'linux') return (_linuxIntelGpuRuntimeCache = false)
+  _linuxIntelGpuRuntimeCache = linuxIntelGpuRuntimeMarkers.some((p) => fs.existsSync(p))
+  return _linuxIntelGpuRuntimeCache
+}
+
+// Library-path entries that should be prepended to LD_LIBRARY_PATH when the
+// XPU variant is active on Linux. Only existing directories are returned.
+function getLinuxOneApiLibPaths(): string[] {
+  const candidates = [
+    // Note: compiler/latest/lib is intentionally excluded — its libintelocl.so
+    // overrides the system ze_loader and breaks XPU device detection.
+    // libsycl is already bundled inside the ComfyUI venv.
+    '/opt/intel/oneapi/mkl/latest/lib',
+    '/opt/intel/oneapi/mkl/latest/lib/intel64',
+    '/opt/intel/oneapi/tbb/latest/lib',
+    '/opt/intel/oneapi/tbb/latest/lib/intel64/gcc4.8',
+    '/usr/lib/x86_64-linux-gnu',
+  ]
+  return candidates.filter((p) => fs.existsSync(p))
+}
+
 export class ComfyUiBackendService extends LongLivedPythonApiService {
   constructor(name: BackendServiceName, port: number, win: BrowserWindow, settings: LocalSettings) {
     super(name, port, win, settings)
@@ -92,6 +134,7 @@ export class ComfyUiBackendService extends LongLivedPythonApiService {
   private getDesiredVariant(): ComfyUiVariant {
     if (this.settings.productMode === 'nvidia') return 'cuda'
     if (process.platform === 'win32') return 'xpu'
+    if (process.platform === 'linux' && linuxHasIntelGpuRuntime()) return 'xpu'
     return 'cpu'
   }
 
@@ -572,11 +615,19 @@ export class ComfyUiBackendService extends LongLivedPythonApiService {
       try {
         if (this.comfyUiVariant === 'xpu') {
           this.appLogger.info('patching hijacks into comfyUI model_management (xpu)', this.name)
-          patchFile(
-            path.join(this.serviceDir, 'comfy/model_management.py'),
-            'from comfy.model_management import get_model',
-            ['from ipex_to_cuda import ipex_init', 'ipex_init()'],
-          )
+          try {
+            await patchFile(
+              path.join(this.serviceDir, 'comfy/model_management.py'),
+              'from comfy.model_management import get_model',
+              ['from ipex_to_cuda import ipex_init', 'ipex_init()'],
+            )
+          } catch (patchErr) {
+            // Newer ComfyUI / torch+xpu versions don't need the ipex_to_cuda bridge.
+            this.appLogger.info(
+              'ipex_to_cuda patch skipped (not applicable to this ComfyUI version): ' + patchErr,
+              this.name,
+            )
+          }
         } else {
           // If a previous install injected ipex_to_cuda, remove it for non-XPU variants.
           const mmPath = path.join(this.serviceDir, 'comfy/model_management.py')
@@ -843,7 +894,9 @@ export class ComfyUiBackendService extends LongLivedPythonApiService {
   private get torchBackendValue(): string {
     if (this.comfyUiVariant === 'cuda') return 'cu128'
     if (this.comfyUiVariant === 'cpu') return 'cpu'
-    return process.platform === 'win32' ? 'xpu' : 'cpu'
+    if (process.platform === 'win32') return 'xpu'
+    if (process.platform === 'linux' && linuxHasIntelGpuRuntime()) return 'xpu'
+    return 'cpu'
   }
 
   get comfyUiVariantName(): ComfyUiVariant {
@@ -855,17 +908,39 @@ export class ComfyUiBackendService extends LongLivedPythonApiService {
   }
 
   private getCommonEnvVars(): Record<string, string> {
-    return {
-      PATH: `${path.join(this.pythonEnvDir, 'Library', 'bin')};${path.join(this.git.dir, 'cmd')};${process.env.PATH}`,
+    const envVars: Record<string, string> = {
+      PATH: [
+        // Windows: Conda Library/bin + bundled Git cmd directory
+        ...(process.platform === 'win32'
+          ? [path.join(this.pythonEnvDir, 'Library', 'bin'), path.join(this.git.dir, 'cmd')]
+          : [path.join(this.pythonEnvDir, 'bin')]),  // Linux/macOS: venv bin
+        process.env.PATH,
+      ].join(path.delimiter),
       PYTHONNOUSERSITE: 'true',
       SYCL_ENABLE_DEFAULT_CONTEXTS: '1',
       SYCL_CACHE_PERSISTENT: '1',
       PYTHONIOENCODING: 'utf-8',
       HF_ENDPOINT: this.settings.huggingfaceEndpoint,
-      PIP_CONFIG_FILE: 'nul',
+      PIP_CONFIG_FILE: process.platform === 'win32' ? 'nul' : '/dev/null',
       UV_NO_CONFIG: '1',
       UV_TORCH_BACKEND: this.torchBackendValue,
     }
+
+    // On Linux with XPU variant, prepend Intel oneAPI runtime library paths
+    // so IPEX can find libsycl.so, libze_loader.so, libmkl_sycl.so at runtime.
+    if (process.platform === 'linux' && this.comfyUiVariant === 'xpu') {
+      const oneApiLibPaths = getLinuxOneApiLibPaths()
+      if (oneApiLibPaths.length > 0) {
+        envVars.LD_LIBRARY_PATH = [...oneApiLibPaths, process.env.LD_LIBRARY_PATH ?? '']
+          .filter(Boolean)
+          .join(path.delimiter)
+      }
+      // Use composite device hierarchy so Level Zero can make large contiguous
+      // USM allocations (fixes XPU out-of-memory on Meteor Lake iGPU with shared memory)
+      envVars.ZE_FLAT_DEVICE_HIERARCHY = 'COMPOSITE'
+    }
+
+    return envVars
   }
 
   private getDeviceSelectorEnv(): Record<string, string> {
@@ -1071,6 +1146,18 @@ except Exception as e:
 
     const additionalEnvVariables = this.getEnvVars()
     const mediaDir = getMediaDir()
+    // On Linux XPU (Meteor Lake iGPU with shared memory), remove --lowvram:
+    // the iGPU shares up to 57 GB with the system, so --lowvram's piecemeal
+    // model loading fragments the SYCL USM memory pool and causes OOM on
+    // large single allocations (e.g., Flux attention tensors). Use normal
+    // VRAM mode with a small reserve instead.
+    const effectiveParams =
+      process.platform === 'linux' && this.comfyUiVariant === 'xpu'
+        ? this.comfyUiParametersString
+            .replace(/--lowvram\b/g, '')
+            .replace(/--reserve-vram\s+\S+/g, '--reserve-vram 2.0')
+            .trim()
+        : this.comfyUiParametersString
     const parameters = [
       'main.py',
       '--port',
@@ -1079,7 +1166,7 @@ except Exception as e:
       'auto',
       '--output-directory',
       mediaDir,
-      ...this.comfyUiParametersString.split(/\s+/).filter(Boolean),
+      ...effectiveParams.split(/\s+/).filter(Boolean),
     ]
     this.appLogger.info(
       `starting comfyui with ${JSON.stringify({ parameters, additionalEnvVariables })}`,
@@ -1090,7 +1177,10 @@ except Exception as e:
     const apiProcess = spawn(pythonBinary, parameters, {
       cwd: this.serviceDir,
       windowsHide: true,
-      env: Object.assign(process.env, additionalEnvVariables),
+      // Build a fresh env object instead of mutating process.env — otherwise the
+      // injected LD_LIBRARY_PATH / device-selector vars leak into every later
+      // child process spawned from the main Electron process.
+      env: { ...process.env, ...additionalEnvVariables },
     })
 
     //must be at the same tick as the spawn function call

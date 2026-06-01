@@ -12,6 +12,19 @@ import path, { normalize } from 'path'
 import z from 'zod'
 import { execSync } from 'child_process'
 import AdmZip from 'adm-zip'
+import { ProxyAgent, setGlobalDispatcher } from 'undici'
+
+// Honor HTTPS_PROXY / HTTP_PROXY env vars for Node's built-in fetch (undici).
+// Node does NOT pick these up automatically; required for corporate proxies.
+const proxyUrl =
+  process.env.HTTPS_PROXY ||
+  process.env.https_proxy ||
+  process.env.HTTP_PROXY ||
+  process.env.http_proxy
+if (proxyUrl) {
+  console.log(`INFO: routing fetch() through proxy ${proxyUrl}`)
+  setGlobalDispatcher(new ProxyAgent(proxyUrl))
+}
 
 const target = z
   .enum(['win32', 'darwin', 'linux'])
@@ -172,7 +185,8 @@ async function main(): Promise<void> {
     }
     if (target.data in uvSourcePaths) {
       const uvBinaryPath = uvSourcePaths[target.data]
-      const destinationPath = path.join(buildPaths.resourcesDir, 'uv.exe')
+      const uvBinaryName = target.data === 'win32' ? 'uv.exe' : 'uv'
+      const destinationPath = path.join(buildPaths.resourcesDir, uvBinaryName)
       if (existsSync(uvBinaryPath)) {
         renameSync(uvBinaryPath, destinationPath)
         console.log(`✅ Moved ${uvBinaryPath} to ${destinationPath}`)
