@@ -65,6 +65,7 @@
     }
   ],
   "productName": "AI Playground",
+  "homepage": "https://github.com/intel/AI-Playground",
   "directories": {
     "app": ".",
     "output": "../build/electron",
@@ -121,6 +122,7 @@
     "allowElevation": true
   },
   "linux": {
+    "maintainer": "Intel Corporation <ai.playground@intel.com>",
     "target": [
       {
         "target": "deb",
