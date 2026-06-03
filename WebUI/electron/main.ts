@@ -184,12 +184,17 @@ const modesDir = path.resolve(
 // which causes the renderer to show a white screen.
 // Using the software rasterizer for the UI has no visible impact — all
 // AI/compute workloads use Level Zero/SYCL directly, not Chromium's GPU.
-// The renderer sandbox also requires a setuid chrome-sandbox binary which
-// is not available until postinst sets it up, so disable that too.
+// On Electron 20+, the renderer process seccomp sandbox is ENABLED by default.
+// Without disabling it, the renderer crashes with SIGTRAP (exit 133) on Linux
+// systems where certain syscalls (io_uring, etc.) are blocked by the filter.
+// We disable all sandbox layers here; contextIsolation (in webPreferences) is
+// kept enabled as the actual JS security boundary.
 if (process.platform === 'linux') {
   app.disableHardwareAcceleration()
   app.commandLine.appendSwitch('disable-gpu')
   app.commandLine.appendSwitch('no-sandbox')
+  app.commandLine.appendSwitch('disable-setuid-sandbox') // belt-and-suspenders for setuid layer
+  app.commandLine.appendSwitch('disable-dev-shm-usage') // use /tmp instead of /dev/shm to prevent OOM crashes
 }
 
 const singleInstanceLock = app.requestSingleInstanceLock()
@@ -450,6 +455,11 @@ async function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
+      // On Linux, the renderer seccomp sandbox (enabled by default in Electron 20+)
+      // kills the renderer with SIGTRAP (exit 133) on kernels/distros that block
+      // certain syscalls. Setting sandbox:false disables the OS-level seccomp
+      // sandbox while keeping contextIsolation (the JS security boundary) intact.
+      sandbox: process.platform !== 'linux',
     },
   })
   win.webContents.on('did-finish-load', () => {
