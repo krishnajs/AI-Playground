@@ -453,6 +453,7 @@ async function createWindow() {
     },
   })
   win.webContents.on('did-finish-load', () => {
+    appLogger.info('did-finish-load', 'electron-backend', true)
     setTimeout(() => {
       appLogger.onWebcontentReady(win!.webContents)
     }, 100)
@@ -483,10 +484,35 @@ async function createWindow() {
     }, 500)
   })
 
+  // Pipe renderer console messages (warnings + errors) to the app log file.
+  // This is the only way to see renderer JS errors on Linux without DevTools open.
+  win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    const text = `renderer: [L${level}] ${message} (${sourceId}:${line})`
+    if (level >= 2) {
+      appLogger.error(text, 'renderer', true)
+    } else {
+      appLogger.info(text, 'renderer')
+    }
+  })
+
+  // Alert when the renderer process crashes outright (OOM, unhandled C++ exception, etc.)
+  win.webContents.on('render-process-gone', (_event, details) => {
+    appLogger.error(
+      `render-process-gone: reason=${details.reason} exitCode=${details.exitCode}`,
+      'electron-backend',
+      true,
+    )
+    dialog.showErrorBox(
+      'AI Playground — renderer crashed',
+      `The renderer process exited unexpectedly.\nReason: ${details.reason} (exit ${details.exitCode})\n\nCheck logs at:\n${app.getPath('userData')}`,
+    )
+  })
+
   const session = win.webContents.session
 
-  if (!app.isPackaged || settings.debug) {
-    //Open devTool if the app is not packaged
+  if (!app.isPackaged || settings.debug || process.platform === 'linux') {
+    // Always open DevTools on Linux (packaged or not) to allow diagnosing white-screen issues.
+    // DevTools opens as a detached window and shows renderer console errors immediately.
     win.webContents.openDevTools({ mode: 'detach', activate: true })
   }
 
@@ -1884,11 +1910,11 @@ app.whenReady().then(async () => {
     await initServiceRegistry(window, settings)
     spawnLangchainUtilityProcess()
 
-    // F12 opens DevTools in packaged builds for diagnostics.
-    // On Linux especially, this is the only way to inspect a white-screen issue.
+    // F12 opens DevTools — uses module-level `win` directly because
+    // BrowserWindow.getFocusedWindow() returns null on Linux when the window
+    // lacks OS keyboard focus (common with GNOME).
     globalShortcut.register('F12', () => {
-      const focused = BrowserWindow.getFocusedWindow()
-      if (focused) focused.webContents.openDevTools({ mode: 'detach', activate: true })
+      win?.webContents.openDevTools({ mode: 'detach', activate: true })
     })
 
     // On Linux: handle SIGINT (Ctrl+C) and SIGTERM for clean shutdown,
