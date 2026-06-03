@@ -65,7 +65,6 @@
     }
   ],
   "productName": "AI Playground",
-  "homepage": "https://github.com/intel/AI-Playground",
   "directories": {
     "app": ".",
     "output": "../build/electron",
