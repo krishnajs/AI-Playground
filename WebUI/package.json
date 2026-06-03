@@ -3,6 +3,7 @@
   "private": true,
   "version": "3.1.0-alpha",
   "scripts": {
+    "preinstall": "node -e \"if (process.env.HTTPS_PROXY && !process.env.ELECTRON_GET_USE_PROXY) { console.warn('\\n⚠️  HTTPS_PROXY is set but ELECTRON_GET_USE_PROXY is not.\\n   The Electron binary download will fail behind a corporate proxy.\\n   Fix: export ELECTRON_GET_USE_PROXY=true && npm install\\n   Or add it permanently to ~/.bashrc or /etc/environment\\n'); process.exit(1); }\"",
     "dev": "cross-env VITE_DEBUG_TOOLS=\"true\" VITE_PLATFORM_TITLE=\"from Intel®\" AIPG_DEBUGGING_PORT=\"29222\" vite",
     "dev:headless": "xvfb-run -a cross-env VITE_DEBUG_TOOLS=\"true\" VITE_PLATFORM_TITLE=\"from Intel®\" AIPG_DEBUGGING_PORT=\"29222\" vite",
 

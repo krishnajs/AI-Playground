@@ -124,12 +124,15 @@ npm install
 npm run fetch-external-resources
 ```
 
-If you are behind a proxy, set `HTTPS_PROXY` before running `npm install`:
+If you are behind a corporate proxy:
 
 ```bash
 export HTTPS_PROXY=http://your-proxy:port
+export ELECTRON_GET_USE_PROXY=true   # required for the Electron binary download
 npm install
 ```
+
+> **Tip:** Add both lines to `~/.bashrc` or `/etc/environment` so you don't need to set them every session.
 
 ### Launch the Application (Linux)
 

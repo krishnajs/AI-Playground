@@ -51,11 +51,14 @@ cd WebUI
 npm install
 ```
 
-If you are behind a proxy, set `HTTPS_PROXY` first:
+If you are behind a corporate proxy, set **both** of these before running `npm install`:
 ```bash
 export HTTPS_PROXY=http://your-proxy:port
+export ELECTRON_GET_USE_PROXY=true   # required — Electron's binary downloader ignores HTTPS_PROXY without this
 npm install
 ```
+
+> **Tip:** Add both lines to `~/.bashrc` or `/etc/environment` so every terminal session picks them up automatically.
 
 3. **Download external resources:**
 ```bash
@@ -78,11 +81,23 @@ The application will open at **http://localhost:25413**
 
 ## Proxy Configuration
 
-If you're behind a corporate proxy, configure npm before installation:
+If you're behind a corporate proxy, two environment variables are required:
+
+| Variable | Purpose |
+|---|---|
+| `HTTPS_PROXY` | Routes all npm registry and tool downloads through your proxy |
+| `ELECTRON_GET_USE_PROXY=true` | **Required** — Electron's binary downloader (`@electron/get`) uses its own HTTP client and ignores `HTTPS_PROXY` unless this flag is set |
+
+For a persistent setup, add both to `/etc/environment` or `~/.bashrc`:
 
 ```bash
-npm config set proxy http://proxy-dmz.intel.com:911
-npm config set https-proxy http://proxy-dmz.intel.com:912
+export HTTPS_PROXY=http://your-proxy:port
+export ELECTRON_GET_USE_PROXY=true
+```
+
+For npm registry SSL issues on strict corporate firewalls:
+
+```bash
 npm config set strict-ssl false
 ```
 
@@ -90,8 +105,17 @@ npm config set strict-ssl false
 
 ## Troubleshooting
 
-### npm install fails with timeout
-Configure proxy settings (see Proxy Configuration section above).
+### npm install fails with timeout or ETIMEDOUT
+
+The Electron binary downloader (`@electron/get`) does **not** automatically use `HTTPS_PROXY`. You must set `ELECTRON_GET_USE_PROXY=true`:
+
+```bash
+export HTTPS_PROXY=http://your-proxy:port
+export ELECTRON_GET_USE_PROXY=true
+npm install
+```
+
+For a permanent fix, add both lines to `~/.bashrc` or `/etc/environment`.
 
 ### "UV executable not found"
 ```bash
