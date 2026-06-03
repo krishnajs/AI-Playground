@@ -7,8 +7,8 @@ Quick guide to run Intel AI Playground on Linux with full GPU acceleration.
 ### Prerequisites
 
 - Ubuntu 24.04 LTS or newer
-- Intel Core Ultra with integrated GPU
-- Node.js 22+
+- Intel Arc BMG, LNL, or PTL-H iGPU
+- Node.js 22 (via nvm — see install steps below)
 - Python 3.12+
 
 Install required packages:
@@ -24,31 +24,20 @@ sudo apt install -y \
   libssl-dev libgl1
 ```
 
-> **Why so many `-dev` packages?**  uv builds several Python wheels from source on first run
+> **Why so many `-dev` packages?** uv builds several Python wheels from source on first run
 > (`pycairo`, `llvmlite`, `numpy`, image/video libs). They each need the matching system
-> headers (`pkg-config cairo`, `Python.h`, libav*, etc.). `start-ui.sh` runs a preflight
-> check and tells you exactly which apt packages are missing before the install starts —
-> install them in one go and the rest of the bring-up is unattended.
+> headers (`pkg-config cairo`, `Python.h`, libav*, etc.).
+> Install them in one go and the rest of the bring-up is unattended.
+
+Install Node.js 22 via nvm:
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+source ~/.bashrc
+nvm install 22
+nvm use 22
+```
 
 ### Installation
-
-**Using the Convenience Script (Recommended):**
-
-1. **Clone and enter the repository:**
-```bash
-git clone <repository-url>
-cd AI-Playground
-```
-
-2. **Run the startup script:**
-```bash
-chmod +x start-ui.sh
-./start-ui.sh
-```
-
-The application will start at **http://localhost:25413**
-
-**Manual Installation:**
 
 1. **Clone and enter the repository:**
 ```bash
@@ -62,6 +51,12 @@ cd WebUI
 npm install
 ```
 
+If you are behind a proxy, set `HTTPS_PROXY` first:
+```bash
+export HTTPS_PROXY=http://your-proxy:port
+npm install
+```
+
 3. **Download external resources:**
 ```bash
 npm run fetch-external-resources
@@ -71,6 +66,13 @@ npm run fetch-external-resources
 ```bash
 npm run dev
 ```
+
+For headless environments (VNC, remote server without a display):
+```bash
+npm run dev:headless
+```
+
+The application will open at **http://localhost:25413**
 
 ---
 
@@ -189,7 +191,7 @@ find ComfyUI -maxdepth 3 -name '.aipg-comfyui-revision*' -delete
 # 4. clear uv's failed build cache so it actually retries the build
 rm -rf ~/.cache/uv/sdists-v9/pypi/pycairo ~/.cache/uv/builds-v0
 # 5. relaunch — installer runs from a clean slate
-./start-ui.sh
+npm run dev
 ```
 
 To debug a recurring failure, run `uv sync` directly so you see the real
@@ -205,17 +207,7 @@ cd ComfyUI
 ## Linux-Specific Behavior
 
 ### Window Close Behavior
-On Linux, closing the Electron window does **NOT** stop the backend services. This allows server-like operation:
-
-- Close window → Services keep running
-- Reconnect via http://localhost:25413
-- Full shutdown: Press `Ctrl+C` in terminal or use `SIGTERM`
-
-### Process Management
-The `start-ui.sh` script automatically kills previous instances before starting:
-```bash
-./start-ui.sh  # Safe to run multiple times
-```
+On Linux, closing the Electron window **stops all backend services** (matching Windows behavior). To restart, run `npm run dev` again.
 
 ---
 

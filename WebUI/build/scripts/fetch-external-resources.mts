@@ -195,7 +195,7 @@ async function main(): Promise<void> {
       }
     }
 
-    // move 7zip binary to resourcesDir/7zr.exe (all platforms use 7zr.exe name for consistency)
+    // move 7zip binary to resourcesDir — name is platform-specific: 7zr.exe on Windows, 7zr elsewhere
     const sevenZipSourcePaths: Record<string, string> = {
       darwin: path.join(buildPaths.tmpDir, '7zz'),
       linux: path.join(buildPaths.tmpDir, '7zz'),
@@ -203,7 +203,8 @@ async function main(): Promise<void> {
     }
     {
       const sevenZrPath = sevenZipSourcePaths[target.data]
-      const destinationPath = path.join(buildPaths.resourcesDir, '7zr.exe')
+      const sevenZrDestName = target.data === 'win32' ? '7zr.exe' : '7zr'
+      const destinationPath = path.join(buildPaths.resourcesDir, sevenZrDestName)
       if (existsSync(sevenZrPath)) {
         renameSync(sevenZrPath, destinationPath)
         console.log(`✅ Moved ${sevenZrPath} to ${destinationPath}`)

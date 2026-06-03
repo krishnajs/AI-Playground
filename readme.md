@@ -99,6 +99,64 @@ npm run build
 
 The installer executable will be located in the `build/electron` folder.
 
+---
+
+## Linux Development
+
+> Supported GPUs: Intel Arc BMG, LNL, and PTL-H iGPU.
+
+### Install Node.js (Linux)
+
+Use [nvm](https://github.com/nvm-sh/nvm) to install Node.js 22:
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+source ~/.bashrc
+nvm install 22
+nvm use 22
+```
+
+### Install Dependencies and External Resources
+
+```bash
+cd WebUI
+npm install
+npm run fetch-external-resources
+```
+
+If you are behind a proxy, set `HTTPS_PROXY` before running `npm install`:
+
+```bash
+export HTTPS_PROXY=http://your-proxy:port
+npm install
+```
+
+### Launch the Application (Linux)
+
+This launches the full Electron app in development mode:
+
+```bash
+npm run dev
+```
+
+For headless environments (VNC, remote server without display):
+
+```bash
+npm run dev:headless
+```
+
+### Build Packages (Linux)
+
+Produces a `.deb` installer:
+
+```bash
+npm run build:linux
+```
+
+Output is in `build/electron/`.
+
+---
+
 ## Model Support
 AI Playground does not ship with any generative AI models but does make models available for all features either directly from the interface or indirectly by the users downloading models from HuggingFace.co or CivitAI.com and placing them in the appropriate model folder. 
 

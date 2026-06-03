@@ -207,7 +207,7 @@ const ThemeSchema = z.enum(['dark', 'lnl', 'bmg', 'light'])
 const ProductModeSchema = z.enum(['studio', 'essentials', 'nvidia'])
 const LocalSettingsSchema = z.object({
   debug: z.boolean().default(false),
-  deviceArchOverride: z.enum(['bmg', 'acm', 'arl_h', 'wcl', 'lnl', 'mtl']).nullable().default(null),
+  deviceArchOverride: z.enum(['bmg', 'acm', 'ptl', 'arl_h', 'wcl', 'lnl', 'mtl']).nullable().default(null),
   isAdminExec: z.boolean().default(false),
   availableThemes: z.array(ThemeSchema).default(['dark', 'lnl', 'bmg', 'light']),
   currentTheme: ThemeSchema.default('bmg'),
@@ -645,7 +645,7 @@ async function shutdownServicesAndQuit() {
 
 // Quit when all windows are closed, except on macOS.
 // - macOS: apps stay active until Cmd+Q (standard macOS behavior).
-// - Linux/Windows: close window => stop services and quit app (parity behavior).
+// - Linux/Windows: close window => stop services and quit app.
 app.on('window-all-closed', async () => {
   if (process.platform !== 'darwin') {
     await shutdownServicesAndQuit()

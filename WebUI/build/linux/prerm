@@ -1,0 +1,28 @@
+#!/bin/sh
+# Intel AI Playground — pre-removal script
+# Runs as root before `dpkg --remove` or `apt remove`.
+# Stops any running instance cleanly before the package files are removed.
+
+set -e
+
+case "$1" in
+    remove|deconfigure)
+        # Stop running AI Playground instances gracefully
+        pkill -TERM -f "ai-playground" 2>/dev/null || true
+        pkill -TERM -f "AI Playground"  2>/dev/null || true
+
+        # Brief wait for clean shutdown, then force-kill if still running
+        sleep 2
+        pkill -KILL -f "ai-playground" 2>/dev/null || true
+        pkill -KILL -f "AI Playground"  2>/dev/null || true
+        ;;
+    upgrade|failed-upgrade)
+        # On upgrade the new postinst will start the app; nothing to do here
+        ;;
+    *)
+        echo "prerm called with unknown argument: $1" >&2
+        exit 1
+        ;;
+esac
+
+exit 0
