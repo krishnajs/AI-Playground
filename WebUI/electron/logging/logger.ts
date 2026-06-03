@@ -6,7 +6,10 @@ import { app } from 'electron'
 class Logger {
   webContents: WebContents | null = null
   private pathToLogFiles: string = path.resolve(
-    app.isPackaged ? process.resourcesPath : path.join(__dirname, '../../external/'),
+    // In packaged builds, write logs to the user's app data directory
+    // (e.g. ~/.config/ai-playground on Linux) which is always writable.
+    // process.resourcesPath is root-owned in a deb install and logs would be silently dropped.
+    app.isPackaged ? app.getPath('userData') : path.join(__dirname, '../../external/'),
   )
   private startupMessageCache: {
     message: string

@@ -22,6 +22,7 @@ import {
   app,
   BrowserWindow,
   dialog,
+  globalShortcut,
   ipcMain,
   IpcMainEvent,
   IpcMainInvokeEvent,
@@ -158,6 +159,16 @@ function loadModeConfig(mode: string): ProductModeFileConfig | null {
 process.env.DIST = path.join(__dirname, '../')
 process.env.VITE_PUBLIC = path.join(__dirname, app.isPackaged ? '../..' : '../../../public')
 
+// Startup diagnostic — written to userData (user-readable) so failures can be diagnosed.
+// On Linux packaged builds: ~/.config/ai-playground/aip-YYYY-MM-DD.log
+app.whenReady().then(() => {
+  appLogger.info(
+    `startup: isPackaged=${app.isPackaged} DIST="${process.env.DIST}" userData="${app.getPath('userData')}"`,
+    'electron-backend',
+    true,
+  )
+})
+
 const externalRes = path.resolve(
   app.isPackaged ? process.resourcesPath : path.join(__dirname, '../../external/'),
 )
@@ -167,23 +178,18 @@ const modesDir = path.resolve(
     ? path.join(process.resourcesPath, 'modes')
     : path.join(__dirname, '../../../modes/'),
 )
-// On Linux the renderer sandbox requires a setuid chrome-sandbox binary.
-// Since we ship a deb without setuid setup, disable the sandbox entirely.
-// This does NOT affect AI/compute workloads — those use Level Zero/SYCL directly.
+// On Linux, disable Chromium's GPU compositing process.
+// The GPU process frequently crashes on machines without a fully configured
+// DRI/Mesa stack (e.g. PTL/MTL iGPU before Intel GPU runtime is installed),
+// which causes the renderer to show a white screen.
+// Using the software rasterizer for the UI has no visible impact — all
+// AI/compute workloads use Level Zero/SYCL directly, not Chromium's GPU.
+// The renderer sandbox also requires a setuid chrome-sandbox binary which
+// is not available until postinst sets it up, so disable that too.
 if (process.platform === 'linux') {
+  app.disableHardwareAcceleration()
+  app.commandLine.appendSwitch('disable-gpu')
   app.commandLine.appendSwitch('no-sandbox')
-
-  if (!app.isPackaged) {
-    // Dev mode on Linux typically runs under Xvfb or without a GPU-capable display
-    // (e.g. `npm run dev:headless`). Disable GPU rendering to avoid the
-    // "GPU process isn't usable" crash that occurs on virtual/headless displays.
-    // NOT applied to packaged builds: real desktop displays need GPU compositing.
-    // Keep the software rasterizer enabled — do NOT pass --disable-software-rasterizer.
-    // Chromium's appendSwitch(name, 'false') does NOT unset a flag, it sets the
-    // switch with the literal value "false" which still disables the rasterizer.
-    app.disableHardwareAcceleration()
-    app.commandLine.appendSwitch('disable-gpu')
-  }
 }
 
 const singleInstanceLock = app.requestSingleInstanceLock()
@@ -538,11 +544,25 @@ async function createWindow() {
     }
   })
 
+  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    appLogger.error(
+      `did-fail-load: code=${errorCode} desc="${errorDescription}" url="${validatedURL}"`,
+      'electron-backend',
+      true,
+    )
+    dialog.showErrorBox(
+      'AI Playground — failed to load UI',
+      `Error ${errorCode}: ${errorDescription}\nURL: ${validatedURL}\n\nCheck logs at:\n${app.getPath('userData')}`,
+    )
+  })
+
   if (VITE_DEV_SERVER_URL) {
     await win.loadURL(VITE_DEV_SERVER_URL)
     appLogger.info('load url:' + VITE_DEV_SERVER_URL, 'electron-backend')
   } else {
-    await win.loadFile(path.join(process.env.DIST, 'index.html'))
+    const indexPath = path.join(process.env.DIST, 'index.html')
+    appLogger.info(`loadFile: ${indexPath}`, 'electron-backend', true)
+    await win.loadFile(indexPath)
   }
 
   // Make all links open with the browser, not with the application
@@ -635,6 +655,7 @@ function handleUtilityFunction<T, R>(
 }
 
 app.on('quit', async () => {
+  globalShortcut.unregisterAll()
   await stopAllMcpServers()
   if (singleInstanceLock) {
     app.releaseSingleInstanceLock()
@@ -1862,6 +1883,13 @@ app.whenReady().then(async () => {
     const window = await createWindow()
     await initServiceRegistry(window, settings)
     spawnLangchainUtilityProcess()
+
+    // F12 opens DevTools in packaged builds for diagnostics.
+    // On Linux especially, this is the only way to inspect a white-screen issue.
+    globalShortcut.register('F12', () => {
+      const focused = BrowserWindow.getFocusedWindow()
+      if (focused) focused.webContents.openDevTools({ mode: 'detach', activate: true })
+    })
 
     // On Linux: handle SIGINT (Ctrl+C) and SIGTERM for clean shutdown,
     // including headless/non-interactive runs.
