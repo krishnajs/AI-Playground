@@ -107,6 +107,15 @@ case "$1" in
             echo "AI Playground: no Intel GPU detected — skipping GPU runtime install."
         fi
 
+        # Set chrome-sandbox permissions so Electron's renderer sandbox can work.
+        # (Our custom postinst replaces electron-builder's default which would have
+        # done this. --no-sandbox in main.ts is the fallback, but setuid is preferred.)
+        CHROME_SANDBOX="/opt/AI Playground/chrome-sandbox"
+        if [ -f "$CHROME_SANDBOX" ]; then
+            chown root "$CHROME_SANDBOX" 2>/dev/null || true
+            chmod 4755 "$CHROME_SANDBOX" 2>/dev/null || true
+        fi
+
         # Refresh desktop integration (icon + MIME)
         if command -v update-desktop-database >/dev/null 2>&1; then
             update-desktop-database /usr/share/applications/ 2>/dev/null || true

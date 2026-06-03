@@ -167,17 +167,23 @@ const modesDir = path.resolve(
     ? path.join(process.resourcesPath, 'modes')
     : path.join(__dirname, '../../../modes/'),
 )
-// On Linux with Xvfb or headless display, Electron's Chromium renderer cannot
-// use hardware GPU acceleration and will crash with "GPU process isn't usable".
-// Disable hardware acceleration so the software rasterizer is used instead.
+// On Linux the renderer sandbox requires a setuid chrome-sandbox binary.
+// Since we ship a deb without setuid setup, disable the sandbox entirely.
 // This does NOT affect AI/compute workloads — those use Level Zero/SYCL directly.
 if (process.platform === 'linux') {
-  app.disableHardwareAcceleration()
-  app.commandLine.appendSwitch('disable-gpu')
-  // Keep the software rasterizer enabled (do NOT pass --disable-software-rasterizer).
-  // Chromium's appendSwitch(name, 'false') does NOT unset a flag — it sets the
-  // switch with the literal value "false" which still disables the rasterizer.
   app.commandLine.appendSwitch('no-sandbox')
+
+  if (!app.isPackaged) {
+    // Dev mode on Linux typically runs under Xvfb or without a GPU-capable display
+    // (e.g. `npm run dev:headless`). Disable GPU rendering to avoid the
+    // "GPU process isn't usable" crash that occurs on virtual/headless displays.
+    // NOT applied to packaged builds: real desktop displays need GPU compositing.
+    // Keep the software rasterizer enabled — do NOT pass --disable-software-rasterizer.
+    // Chromium's appendSwitch(name, 'false') does NOT unset a flag, it sets the
+    // switch with the literal value "false" which still disables the rasterizer.
+    app.disableHardwareAcceleration()
+    app.commandLine.appendSwitch('disable-gpu')
+  }
 }
 
 const singleInstanceLock = app.requestSingleInstanceLock()

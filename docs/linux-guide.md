@@ -79,6 +79,53 @@ The application will open at **http://localhost:25413**
 
 ---
 
+## Building and Installing the .deb Package
+
+To produce a Debian package for distribution or installation on another machine:
+
+```bash
+cd WebUI
+npm run build:linux
+```
+
+The `.deb` is written to `build/electron/AI Playground-<version>.deb`.
+
+### Installing the .deb
+
+**Use `dpkg -i`, not `apt install`, for local `.deb` files:**
+
+```bash
+cd build/electron
+sudo dpkg -i "AI Playground-3.1.0-alpha.deb"
+sudo apt-get install -f          # pulls in any missing dependencies
+```
+
+> **Why not `sudo apt install ./...deb`?**
+> `apt` routes even local file installs through its sandboxed `_apt` helper, which
+> runs as the `_apt` user and cannot read files inside your home directory (`/home/…`).
+> This produces the error:
+> ```
+> N: Download is performed unsandboxed as root as file '…' couldn't be accessed by user '_apt'.
+>    - pkgAcquire::Run (13: Permission denied)
+> ```
+> `dpkg -i` installs directly from disk without any sandboxing and is always the
+> correct tool for installing local packages.
+
+### Reinstalling / upgrading
+
+```bash
+sudo dpkg -i "AI Playground-3.1.0-alpha.deb"   # dpkg handles upgrades too
+sudo apt-get install -f
+```
+
+### Removing
+
+```bash
+sudo apt remove ai-playground
+```
+
+---
+
 ## Proxy Configuration
 
 If you're behind a corporate proxy, two environment variables are required:
@@ -116,6 +163,16 @@ npm install
 ```
 
 For a permanent fix, add both lines to `~/.bashrc` or `/etc/environment`.
+
+### `apt install ./…deb` fails with "Permission denied" for `_apt`
+
+`apt` sandboxes local file installs using the `_apt` user, which cannot access your home
+directory. Use `dpkg -i` instead:
+
+```bash
+sudo dpkg -i "AI Playground-3.1.0-alpha.deb"
+sudo apt-get install -f
+```
 
 ### "UV executable not found"
 ```bash
