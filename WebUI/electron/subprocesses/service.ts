@@ -1,6 +1,7 @@
 import { ChildProcess } from 'node:child_process'
 import { app, BrowserWindow, net } from 'electron'
 import * as filesystem from 'fs-extra'
+import { linuxDataDir } from '../util.ts'
 import fsPromises from 'fs/promises'
 import path from 'node:path'
 import { appLoggerInstance } from '../logging/logger.ts'
@@ -139,7 +140,11 @@ export async function createEnhancedErrorDetails(
 }
 
 export const aipgBaseDir = () =>
-  app.isPackaged ? process.resourcesPath : path.join(__dirname, '../../../')
+  app.isPackaged
+    ? process.platform === 'linux'
+      ? linuxDataDir()
+      : process.resourcesPath
+    : path.join(__dirname, '../../../')
 
 export const aipgResourcesDir = () =>
   app.isPackaged ? aipgBaseDir() : path.join(aipgBaseDir(), 'build', 'resources')
@@ -483,10 +488,14 @@ export abstract class LongLivedPythonApiService implements ApiService {
 
   encapsulatedProcess: ChildProcess | null = null
 
-  readonly baseDir = app.isPackaged ? process.resourcesPath : path.join(__dirname, '../../../')
-  readonly wheelDir = path.join(
-    app.isPackaged ? this.baseDir : path.join(__dirname, '../../external/'),
-  )
+  readonly baseDir = app.isPackaged
+    ? process.platform === 'linux'
+      ? linuxDataDir()
+      : process.resourcesPath
+    : path.join(__dirname, '../../../')
+  readonly wheelDir = app.isPackaged
+    ? process.resourcesPath
+    : path.join(__dirname, '../../external/')
   abstract readonly pythonEnvDir: string
   abstract readonly serviceDir: string
   abstract isSetUp: boolean

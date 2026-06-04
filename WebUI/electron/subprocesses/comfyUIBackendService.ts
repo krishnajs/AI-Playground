@@ -28,7 +28,7 @@ import {
 import { ProcessError } from './osProcessHelper.ts'
 import { getMediaDir } from '../util.ts'
 import { cudaVisibleDevicesEnv, levelZeroDeviceSelectorEnv } from './deviceDetection.ts'
-import { BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { LocalSettings } from '../main.ts'
 import { downloadCustomNode } from './comfyuiTools.ts'
 import { getBundledComfyUiGitRefSync } from '../remoteUpdates.ts'
@@ -373,8 +373,9 @@ export class ComfyUiBackendService extends LongLivedPythonApiService {
   }
 
   private async installComfyUiFlexibleDeps(reinstallTorch = false): Promise<void> {
+    const comfyuiDepsBase = app.isPackaged ? process.resourcesPath : aipgBaseDir
     const flexiblePyprojectSource = path.join(
-      aipgBaseDir,
+      comfyuiDepsBase,
       'comfyui-deps',
       'pyproject-flexible-venv.toml',
     )
@@ -526,7 +527,7 @@ export class ComfyUiBackendService extends LongLivedPythonApiService {
         await this.git.run(['-C', this.serviceDir, 'checkout', this.revision], {}, this.serviceDir)
       }
 
-      const comfyUIDepsDir = path.join(aipgBaseDir, 'comfyui-deps')
+      const comfyUIDepsDir = path.join(app.isPackaged ? process.resourcesPath : aipgBaseDir, 'comfyui-deps')
       const pyprojectSource = path.join(comfyUIDepsDir, 'pyproject.toml')
       const pyprojectTarget = path.join(this.serviceDir, 'pyproject.toml')
       const uvLockTarget = path.join(this.serviceDir, 'uv.lock')
@@ -707,7 +708,7 @@ export class ComfyUiBackendService extends LongLivedPythonApiService {
 
     const installBuiltinCustomNodes = async (): Promise<void> => {
       try {
-        const builtinCustomNodesDir = path.join(aipgBaseDir, 'comfyui-deps', 'custom_nodes')
+        const builtinCustomNodesDir = path.join(app.isPackaged ? process.resourcesPath : aipgBaseDir, 'comfyui-deps', 'custom_nodes')
 
         if (!filesystem.existsSync(builtinCustomNodesDir)) {
           this.appLogger.info(

@@ -74,7 +74,7 @@ import {
   removeMcpServer,
   type McpServerConfig,
 } from './subprocesses/mcpServers'
-import { externalResourcesDir, getMediaDir } from './util.ts'
+import { externalResourcesDir, getMediaDir, linuxDataDir } from './util.ts'
 import { loadDemoProfile, type DemoProfile } from './demoProfile.ts'
 import type { ModelPaths } from '@/assets/js/store/models.ts'
 import type { IndexedDocument, EmbedInquiry } from '@/assets/js/store/textInference.ts'
@@ -341,6 +341,59 @@ function applyPresetFilter(
 let settings = LocalSettingsSchema.parse({})
 let demoProfile: DemoProfile | null = null
 
+/**
+ * Seed the Linux per-user data directory (~/.local/share/ai-playground/) with the Python backend
+ * scripts and uv project files bundled in process.resourcesPath.  This is required because the
+ * packaged /opt install tree is root-owned and the app runs as a normal user — all mutable backend
+ * state (venvs, downloads, models) must live in the XDG data dir instead.
+ *
+ * The seed is skipped when the version marker in the data dir already matches the running version.
+ */
+async function seedLinuxDataDir(): Promise<void> {
+  if (!app.isPackaged || process.platform !== 'linux') return
+
+  const dataDir = linuxDataDir()
+  const versionFile = path.join(dataDir, '.aipg-version')
+  const currentVersion = app.getVersion()
+
+  try {
+    const savedVersion = fs.readFileSync(versionFile, 'utf-8').trim()
+    if (savedVersion === currentVersion) {
+      appLogger.info(`Linux data dir already seeded for version ${currentVersion}`, 'electron-backend')
+      return
+    }
+  } catch {
+    // Version file absent — first run or upgrade, fall through to seed.
+  }
+
+  appLogger.info(`Seeding Linux data dir ${dataDir} for version ${currentVersion}`, 'electron-backend', true)
+
+  // Copy Python backend scripts and uv project files (pyproject.toml, uv.lock).
+  // Skip .venv/ directories — those are created by uv during backend installation.
+  const copyDirSkipVenv = (src: string, dst: string): void => {
+    fs.mkdirSync(dst, { recursive: true })
+    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+      if (entry.name === '.venv' || entry.name === '__pycache__') continue
+      const srcPath = path.join(src, entry.name)
+      const dstPath = path.join(dst, entry.name)
+      if (entry.isDirectory()) {
+        copyDirSkipVenv(srcPath, dstPath)
+      } else {
+        fs.copyFileSync(srcPath, dstPath)
+      }
+    }
+  }
+
+  for (const dir of ['service', 'OpenVINO']) {
+    const src = path.join(process.resourcesPath, dir)
+    if (!fs.existsSync(src)) continue
+    copyDirSkipVenv(src, path.join(dataDir, dir))
+  }
+
+  fs.writeFileSync(versionFile, currentVersion, 'utf-8')
+  appLogger.info(`Linux data dir seeded successfully`, 'electron-backend', true)
+}
+
 /** Packaged app: single JSON next to resources. Dev: never write here (Vite watches the repo). */
 function getPackagedSettingsPath(): string {
   return path.join(process.resourcesPath, 'settings.json')
@@ -351,9 +404,12 @@ function getDevSettingsDefaultsPath(): string {
   return path.join(__dirname, '../../external/settings-dev.json')
 }
 
-/** Writable path: packaged = resources settings; dev = userData overlay (avoids Vite reload loops). */
+/** Writable path: packaged Linux = XDG user data dir; packaged Windows/Mac = resources; dev = userData overlay. */
 function getWritableSettingsPath(): string {
   if (app.isPackaged) {
+    if (process.platform === 'linux') {
+      return path.join(linuxDataDir(), 'settings.json')
+    }
     return getPackagedSettingsPath()
   }
   return path.join(app.getPath('userData'), 'ai-playground-local-settings.json')
@@ -394,6 +450,7 @@ async function loadSettings() {
   settings = LocalSettingsSchema.parse({})
 
   if (app.isPackaged) {
+    // Load bundled defaults first
     const packagedPath = getPackagedSettingsPath()
     appLogger.info(`loading packaged settings from ${packagedPath}`, 'electron-backend')
     if (fs.existsSync(packagedPath)) {
@@ -402,6 +459,19 @@ async function loadSettings() {
         settings = LocalSettingsSchema.parse({ ...settings, ...raw })
       } catch (e) {
         appLogger.error(`failed to load settings: ${e}`, 'electron-backend')
+      }
+    }
+    // On Linux, overlay user-written settings on top of bundled defaults
+    if (process.platform === 'linux') {
+      const userSettingsPath = getWritableSettingsPath()
+      appLogger.info(`loading Linux user settings overlay from ${userSettingsPath}`, 'electron-backend')
+      if (fs.existsSync(userSettingsPath)) {
+        try {
+          const raw = JSON.parse(fs.readFileSync(userSettingsPath, { encoding: 'utf8' }))
+          settings = LocalSettingsSchema.parse({ ...settings, ...raw })
+        } catch (e) {
+          appLogger.error(`failed to load Linux user settings overlay: ${e}`, 'electron-backend')
+        }
       }
     }
   } else {
@@ -1871,11 +1941,14 @@ app.whenReady().then(async () => {
     })
     app.exit()
   } else {
+    await seedLinuxDataDir()
     const settings = await loadSettings()
 
     const modelsDir = path.resolve(
       app.isPackaged
-        ? path.join(process.resourcesPath, 'models')
+        ? process.platform === 'linux'
+          ? path.join(linuxDataDir(), 'models')
+          : path.join(process.resourcesPath, 'models')
         : path.join(__dirname, '../../../models'),
     )
     // Start temp-folder cleanup without blocking application startup

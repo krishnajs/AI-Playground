@@ -4,12 +4,16 @@ import path from 'path'
 import fs from 'fs'
 import { spawn } from 'child_process'
 import z from 'zod'
+import { linuxDataDir } from '../../util.ts'
 
 export const aipgBaseDir = app.isPackaged
-  ? process.resourcesPath
+  ? process.platform === 'linux'
+    ? linuxDataDir()
+    : process.resourcesPath
   : path.join(__dirname, '../../../')
+// buildResources always points to the read-only resources bundle (contains the uv binary, wheels, etc.)
 export const buildResources = app.isPackaged
-  ? aipgBaseDir
+  ? process.resourcesPath
   : path.join(aipgBaseDir, 'build', 'resources')
 const uvBinary = process.platform === 'win32' ? 'uv.exe' : 'uv'
 export const uvPath = path.join(buildResources, uvBinary)

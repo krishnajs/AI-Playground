@@ -10,6 +10,7 @@ import { LocalSettings } from '../main.ts'
 import getPort, { portNumbers } from 'get-port'
 import { installBackend } from './uvBasedBackends/uv.ts'
 import { extract } from './tools.ts'
+import { linuxDataDir } from '../util.ts'
 
 const execAsync = promisify(exec)
 
@@ -32,7 +33,11 @@ export class OpenVINOBackendService implements ApiService {
   readonly settings: LocalSettings
 
   // Service directories
-  readonly baseDir = app.isPackaged ? process.resourcesPath : path.join(__dirname, '../../../')
+  readonly baseDir = app.isPackaged
+    ? process.platform === 'linux'
+      ? linuxDataDir()
+      : process.resourcesPath
+    : path.join(__dirname, '../../../')
   readonly serviceDir: string
   readonly ovmsDir: string
   readonly ovmsExePath: string
