@@ -141,11 +141,12 @@
     "icon": "app.png",
     "artifactName": "${productName}-${version}.${ext}",
     "category": "Utility",
-    "synopsis": "Intel AI Playground — local AI on Intel GPU",
+    "synopsis": "Intel AI Playground - local AI on Intel GPU",
     "description": "Run large language models and image generation locally on your Intel GPU. Powered by LlamaCPP, ComfyUI and OpenVINO."
   },
   "deb": {
-    "synopsis": "Intel AI Playground — local AI on Intel GPU",
+    "synopsis": "Intel AI Playground - local AI on Intel GPU",
+    "compression": "gz",
     "afterInstall": "build/linux/postinst",
     "afterRemove": "build/linux/prerm",
     "depends": [

@@ -83,6 +83,18 @@ The application will open at **http://localhost:25413**
 
 To produce a Debian package for distribution or installation on another machine:
 
+### Build prerequisites
+
+The build machine needs `binutils` for the `ar` tool that fpm uses to assemble the `.deb`:
+
+```bash
+sudo apt install -y binutils
+```
+
+> **If the build fails with `ar failed (exit code 1)`** check two things first:
+> 1. `which ar` — if missing, install `binutils` above.
+> 2. `df -h` — if the disk is full (ENOSPC), free space before rebuilding.
+
 ```bash
 cd WebUI
 npm run build:linux
