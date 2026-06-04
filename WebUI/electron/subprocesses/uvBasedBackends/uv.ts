@@ -22,6 +22,9 @@ const uvEnv = (extraEnv: Record<string, string> = {}) => ({
   UV_NO_ENV_FILE: '1',
   UV_NO_CONFIG: '1',
   UV_PYTHON_INSTALL_DIR: path.join(aipgBaseDir, 'python-interpreter'),
+  // Co-locate the uv package cache with the app data so all install artefacts are in one place.
+  // This avoids spreading large files across ~/ and makes it easy to reclaim space.
+  UV_CACHE_DIR: path.join(aipgBaseDir, '.uv-cache'),
   VIRTUAL_ENV: undefined,
   ...extraEnv,
 })
