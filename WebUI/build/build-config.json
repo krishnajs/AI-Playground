@@ -169,7 +169,22 @@
       "python3-dev",
       "build-essential",
       "cmake",
-      "pkg-config"
+      "pkg-config",
+      "ninja-build",
+      "meson",
+      "libcairo2-dev",
+      "libgirepository1.0-dev",
+      "libglib2.0-dev",
+      "libjpeg-dev",
+      "libpng-dev",
+      "zlib1g-dev",
+      "libssl-dev",
+      "libgl1",
+      "ffmpeg",
+      "libavformat-dev",
+      "libavcodec-dev",
+      "libavutil-dev",
+      "libswscale-dev"
     ]
   }
 }

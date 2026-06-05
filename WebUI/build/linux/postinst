@@ -25,6 +25,31 @@ has_pkg() {
     dpkg -s "$1" >/dev/null 2>&1
 }
 
+check_disk_space() {
+    # Backend installations require ~15GB minimum on the user's home partition.
+    # Warn (but do not abort) if free space is below the threshold.
+    DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/ai-playground"
+    TARGET_DIR="${DATA_DIR%/*}"  # parent dir that must exist
+    [ -d "$TARGET_DIR" ] || TARGET_DIR="$HOME"
+    AVAIL_KB=$(df -P "$TARGET_DIR" 2>/dev/null | awk 'NR==2 {print $4}')
+    AVAIL_GB=$(( ${AVAIL_KB:-0} / 1048576 ))
+    MIN_GB=15
+
+    if [ "$AVAIL_GB" -lt "$MIN_GB" ]; then
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════════════════╗"
+        echo "║  AI Playground WARNING: Low disk space                              ║"
+        echo "║                                                                     ║"
+        echo "║  Available: ${AVAIL_GB} GB on $(df -P "$TARGET_DIR" | awk 'NR==2 {print $1}')"
+        echo "║  Required:  ~${MIN_GB} GB minimum (backends + Python environments) ║"
+        echo "║                                                                     ║"
+        echo "║  Backend installation will likely fail with ENOSPC.                 ║"
+        echo "║  Free disk space or set XDG_DATA_HOME to a larger partition.        ║"
+        echo "╚══════════════════════════════════════════════════════════════════════╝"
+        echo ""
+    fi
+}
+
 intel_gpu_detected() {
     lspci 2>/dev/null | grep -qi \
         "Intel.*Graphics\|Intel.*GPU\|Intel.*UHD\|Intel.*Arc\|Intel.*Iris"
@@ -100,6 +125,9 @@ install_intel_gpu_runtime() {
 
 case "$1" in
     configure)
+        # Disk space check — warn if insufficient for backend venvs
+        check_disk_space
+
         # Only attempt GPU runtime install when an Intel GPU is visible
         if intel_gpu_detected; then
             install_intel_gpu_runtime || true

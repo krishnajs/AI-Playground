@@ -178,23 +178,15 @@ const modesDir = path.resolve(
     ? path.join(process.resourcesPath, 'modes')
     : path.join(__dirname, '../../../modes/'),
 )
-// On Linux, disable Chromium's GPU compositing process.
-// The GPU process frequently crashes on machines without a fully configured
-// DRI/Mesa stack (e.g. PTL/MTL iGPU before Intel GPU runtime is installed),
-// which causes the renderer to show a white screen.
-// Using the software rasterizer for the UI has no visible impact — all
-// AI/compute workloads use Level Zero/SYCL directly, not Chromium's GPU.
-// On Electron 20+, the renderer process seccomp sandbox is ENABLED by default.
-// Without disabling it, the renderer crashes with SIGTRAP (exit 133) on Linux
-// systems where certain syscalls (io_uring, etc.) are blocked by the filter.
-// We disable all sandbox layers here; contextIsolation (in webPreferences) is
-// kept enabled as the actual JS security boundary.
+// On Linux, disable Chromium GPU compositing and renderer sandbox.
+// GPU crashes without a fully configured DRI/Mesa stack (shows white screen).
+// Seccomp sandbox causes SIGTRAP (exit 133) when syscalls are filtered.
+// contextIsolation remains the JS security boundary.
 if (process.platform === 'linux') {
   app.disableHardwareAcceleration()
   app.commandLine.appendSwitch('disable-gpu')
   app.commandLine.appendSwitch('no-sandbox')
-  app.commandLine.appendSwitch('disable-setuid-sandbox') // belt-and-suspenders for setuid layer
-  app.commandLine.appendSwitch('disable-dev-shm-usage') // use /tmp instead of /dev/shm to prevent OOM crashes
+  app.commandLine.appendSwitch('disable-setuid-sandbox')
 }
 
 const singleInstanceLock = app.requestSingleInstanceLock()

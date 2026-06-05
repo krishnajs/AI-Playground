@@ -17,17 +17,37 @@ export const buildResources = app.isPackaged
   : path.join(aipgBaseDir, 'build', 'resources')
 const uvBinary = process.platform === 'win32' ? 'uv.exe' : 'uv'
 export const uvPath = path.join(buildResources, uvBinary)
-const uvEnv = (extraEnv: Record<string, string> = {}) => ({
-  ...process.env,
-  UV_NO_ENV_FILE: '1',
-  UV_NO_CONFIG: '1',
-  UV_PYTHON_INSTALL_DIR: path.join(aipgBaseDir, 'python-interpreter'),
-  // Co-locate the uv package cache with the app data so all install artefacts are in one place.
-  // This avoids spreading large files across ~/ and makes it easy to reclaim space.
-  UV_CACHE_DIR: path.join(aipgBaseDir, '.uv-cache'),
-  VIRTUAL_ENV: undefined,
-  ...extraEnv,
-})
+const uvEnv = (extraEnv: Record<string, string> = {}) => {
+  const linuxTmpDir = (): string | undefined => {
+    if (process.platform !== 'linux' || process.env.TMPDIR) return undefined
+    // Use /dev/shm for temp files during wheel builds — it is RAM-backed and typically
+    // much larger than the root filesystem's /tmp (which shares disk with / and fills up
+    // during large installs like OpenVINO/PyTorch).
+    const shmTmp = '/dev/shm/aipg-tmp'
+    try {
+      fs.mkdirSync(shmTmp, { recursive: true })
+      return shmTmp
+    } catch {
+      // /dev/shm unavailable (containers) — fall back to app data dir
+      const fallbackTmp = path.join(aipgBaseDir, 'tmp')
+      fs.mkdirSync(fallbackTmp, { recursive: true })
+      return fallbackTmp
+    }
+  }
+
+  const tmpDir = linuxTmpDir()
+
+  return {
+    ...process.env,
+    UV_NO_ENV_FILE: '1',
+    UV_NO_CONFIG: '1',
+    UV_PYTHON_INSTALL_DIR: path.join(aipgBaseDir, 'python-interpreter'),
+    UV_CACHE_DIR: path.join(aipgBaseDir, '.uv-cache'),
+    VIRTUAL_ENV: undefined,
+    ...(tmpDir ? { TMPDIR: tmpDir } : {}),
+    ...extraEnv,
+  }
+}
 
 const assertUv = async (logger: ReturnType<typeof loggerFor>) => {
   try {
@@ -555,4 +575,80 @@ export const installRequirementsTxt = async (
   logger.info(`Installing requirements from ${requirementsTxtPath}`)
 
   await uv(uvCommand, logger, extraEnv)
+}
+
+/**
+ * Prune the UV cache to reclaim disk space after all backends are installed.
+ * Removes cached wheels that are no longer referenced by any installed environment.
+ */
+export const pruneCache = async (): Promise<void> => {
+  const logger = loggerFor('uv.cache-prune')
+  await assertUv(logger)
+  const cacheDir = path.join(aipgBaseDir, '.uv-cache')
+  try {
+    const stat = await fs.promises.stat(cacheDir)
+    if (!stat.isDirectory()) return
+  } catch {
+    return
+  }
+  logger.info('Pruning UV cache to reclaim disk space')
+  await uv(['cache', 'prune'], logger)
+}
+
+/**
+ * Clean /dev/shm temp files created during installation.
+ */
+export const cleanupTmpDir = (): void => {
+  if (process.platform !== 'linux') return
+  const shmTmp = '/dev/shm/aipg-tmp'
+  try {
+    fs.rmSync(shmTmp, { recursive: true, force: true })
+  } catch {
+    // Best-effort cleanup
+  }
+}
+
+/**
+ * Returns estimated disk usage (in bytes) of the app data directory.
+ */
+export const getDataDirSizeEstimate = async (): Promise<{ totalBytes: number; cacheBytes: number; venvsBytes: number }> => {
+  const logger = loggerFor('uv.disk-usage')
+  let totalBytes = 0
+  let cacheBytes = 0
+  let venvsBytes = 0
+
+  const dirSize = async (dir: string): Promise<number> => {
+    let size = 0
+    try {
+      const entries = await fs.promises.readdir(dir, { withFileTypes: true })
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name)
+        if (entry.isDirectory()) {
+          size += await dirSize(fullPath)
+        } else {
+          try {
+            const stat = await fs.promises.stat(fullPath)
+            size += stat.size
+          } catch {
+            // skip inaccessible files
+          }
+        }
+      }
+    } catch {
+      // skip inaccessible dirs
+    }
+    return size
+  }
+
+  const cachePath = path.join(aipgBaseDir, '.uv-cache')
+  cacheBytes = await dirSize(cachePath)
+
+  for (const backend of ['service', 'OpenVINO', 'ComfyUI', 'comfyui-deps']) {
+    const venvPath = path.join(aipgBaseDir, backend, '.venv')
+    venvsBytes += await dirSize(venvPath)
+  }
+
+  totalBytes = cacheBytes + venvsBytes
+  logger.info(`Disk usage estimate: total=${(totalBytes / 1e9).toFixed(1)}GB, cache=${(cacheBytes / 1e9).toFixed(1)}GB, venvs=${(venvsBytes / 1e9).toFixed(1)}GB`)
+  return { totalBytes, cacheBytes, venvsBytes }
 }
