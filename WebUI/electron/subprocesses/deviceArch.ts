@@ -12,6 +12,21 @@ const ID2ARCH: { [key: number]: Arch } = {
   0x64a0: 'lnl',
   0x64b0: 'lnl',
 
+  // ptl
+  0xb08f: 'ptl',
+  0xb090: 'ptl',
+  0xb0a0: 'ptl',
+
+  // mtl
+  0x7d40: 'mtl',
+  0x7d55: 'mtl',
+  0x7dd5: 'mtl',
+  0x7d45: 'mtl',
+
+  // arl-h
+  0x7d51: 'arl_h',
+  0x7dd1: 'arl_h',
+
   // dg2, using alias name "acm"
   0x4f80: 'acm',
   0x4f81: 'acm',
@@ -51,18 +66,6 @@ const ID2ARCH: { [key: number]: Arch } = {
   0x56c1: 'acm',
   0x56c2: 'acm',
 
-  // mtl
-  0x7d40: 'mtl',
-  0x7d55: 'mtl',
-  0x7dd5: 'mtl',
-  0x7d45: 'mtl',
-
-  // // arl
-  // 0x7D67: "arl",
-  0x7d51: 'arl_h',
-  0x7dd1: 'arl_h',
-  // 0x7D41: "arl",
-
   // wcl
   0xfd80: 'wcl',
   0xfd81: 'wcl',
@@ -78,6 +81,8 @@ export function getArchPriority(arch: Arch): number {
       return 5
     case 'acm':
       return 4
+    case 'ptl':
+      return 3
     case 'arl_h':
       return 3
     case 'wcl':
@@ -119,4 +124,4 @@ export const getBestDevice = (
     .map((d) => ({ id: d.id, distanceToBest: levenshteinDistance(d.name, bestDeviceName) }))
     .toSorted((a, b) => a.distanceToBest - b.distanceToBest)[0].id
 
-export type Arch = 'bmg' | 'acm' | 'arl_h' | 'wcl' | 'lnl' | 'mtl' | 'unknown'
+export type Arch = 'bmg' | 'acm' | 'ptl' | 'arl_h' | 'wcl' | 'lnl' | 'mtl' | 'unknown'

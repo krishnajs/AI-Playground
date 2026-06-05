@@ -22,6 +22,7 @@ import {
   app,
   BrowserWindow,
   dialog,
+  globalShortcut,
   ipcMain,
   IpcMainEvent,
   IpcMainInvokeEvent,
@@ -73,7 +74,7 @@ import {
   removeMcpServer,
   type McpServerConfig,
 } from './subprocesses/mcpServers'
-import { externalResourcesDir, getMediaDir } from './util.ts'
+import { externalResourcesDir, getMediaDir, linuxDataDir } from './util.ts'
 import { loadDemoProfile, type DemoProfile } from './demoProfile.ts'
 import type { ModelPaths } from '@/assets/js/store/models.ts'
 import type { IndexedDocument, EmbedInquiry } from '@/assets/js/store/textInference.ts'
@@ -158,6 +159,16 @@ function loadModeConfig(mode: string): ProductModeFileConfig | null {
 process.env.DIST = path.join(__dirname, '../')
 process.env.VITE_PUBLIC = path.join(__dirname, app.isPackaged ? '../..' : '../../../public')
 
+// Startup diagnostic — written to userData (user-readable) so failures can be diagnosed.
+// On Linux packaged builds: ~/.config/ai-playground/aip-YYYY-MM-DD.log
+app.whenReady().then(() => {
+  appLogger.info(
+    `startup: isPackaged=${app.isPackaged} DIST="${process.env.DIST}" userData="${app.getPath('userData')}"`,
+    'electron-backend',
+    true,
+  )
+})
+
 const externalRes = path.resolve(
   app.isPackaged ? process.resourcesPath : path.join(__dirname, '../../external/'),
 )
@@ -167,17 +178,15 @@ const modesDir = path.resolve(
     ? path.join(process.resourcesPath, 'modes')
     : path.join(__dirname, '../../../modes/'),
 )
-// On Linux with Xvfb or headless display, Electron's Chromium renderer cannot
-// use hardware GPU acceleration and will crash with "GPU process isn't usable".
-// Disable hardware acceleration so the software rasterizer is used instead.
-// This does NOT affect AI/compute workloads — those use Level Zero/SYCL directly.
+// On Linux, disable Chromium GPU compositing and renderer sandbox.
+// GPU crashes without a fully configured DRI/Mesa stack (shows white screen).
+// Seccomp sandbox causes SIGTRAP (exit 133) when syscalls are filtered.
+// contextIsolation remains the JS security boundary.
 if (process.platform === 'linux') {
   app.disableHardwareAcceleration()
   app.commandLine.appendSwitch('disable-gpu')
-  // Keep the software rasterizer enabled (do NOT pass --disable-software-rasterizer).
-  // Chromium's appendSwitch(name, 'false') does NOT unset a flag — it sets the
-  // switch with the literal value "false" which still disables the rasterizer.
   app.commandLine.appendSwitch('no-sandbox')
+  app.commandLine.appendSwitch('disable-setuid-sandbox')
 }
 
 const singleInstanceLock = app.requestSingleInstanceLock()
@@ -207,7 +216,7 @@ const ThemeSchema = z.enum(['dark', 'lnl', 'bmg', 'light'])
 const ProductModeSchema = z.enum(['studio', 'essentials', 'nvidia'])
 const LocalSettingsSchema = z.object({
   debug: z.boolean().default(false),
-  deviceArchOverride: z.enum(['bmg', 'acm', 'arl_h', 'wcl', 'lnl', 'mtl']).nullable().default(null),
+  deviceArchOverride: z.enum(['bmg', 'acm', 'ptl', 'arl_h', 'wcl', 'lnl', 'mtl']).nullable().default(null),
   isAdminExec: z.boolean().default(false),
   availableThemes: z.array(ThemeSchema).default(['dark', 'lnl', 'bmg', 'light']),
   currentTheme: ThemeSchema.default('bmg'),
@@ -324,6 +333,59 @@ function applyPresetFilter(
 let settings = LocalSettingsSchema.parse({})
 let demoProfile: DemoProfile | null = null
 
+/**
+ * Seed the Linux per-user data directory (~/.local/share/ai-playground/) with the Python backend
+ * scripts and uv project files bundled in process.resourcesPath.  This is required because the
+ * packaged /opt install tree is root-owned and the app runs as a normal user — all mutable backend
+ * state (venvs, downloads, models) must live in the XDG data dir instead.
+ *
+ * The seed is skipped when the version marker in the data dir already matches the running version.
+ */
+async function seedLinuxDataDir(): Promise<void> {
+  if (!app.isPackaged || process.platform !== 'linux') return
+
+  const dataDir = linuxDataDir()
+  const versionFile = path.join(dataDir, '.aipg-version')
+  const currentVersion = app.getVersion()
+
+  try {
+    const savedVersion = fs.readFileSync(versionFile, 'utf-8').trim()
+    if (savedVersion === currentVersion) {
+      appLogger.info(`Linux data dir already seeded for version ${currentVersion}`, 'electron-backend')
+      return
+    }
+  } catch {
+    // Version file absent — first run or upgrade, fall through to seed.
+  }
+
+  appLogger.info(`Seeding Linux data dir ${dataDir} for version ${currentVersion}`, 'electron-backend', true)
+
+  // Copy Python backend scripts and uv project files (pyproject.toml, uv.lock).
+  // Skip .venv/ directories — those are created by uv during backend installation.
+  const copyDirSkipVenv = (src: string, dst: string): void => {
+    fs.mkdirSync(dst, { recursive: true })
+    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+      if (entry.name === '.venv' || entry.name === '__pycache__') continue
+      const srcPath = path.join(src, entry.name)
+      const dstPath = path.join(dst, entry.name)
+      if (entry.isDirectory()) {
+        copyDirSkipVenv(srcPath, dstPath)
+      } else {
+        fs.copyFileSync(srcPath, dstPath)
+      }
+    }
+  }
+
+  for (const dir of ['service', 'OpenVINO']) {
+    const src = path.join(process.resourcesPath, dir)
+    if (!fs.existsSync(src)) continue
+    copyDirSkipVenv(src, path.join(dataDir, dir))
+  }
+
+  fs.writeFileSync(versionFile, currentVersion, 'utf-8')
+  appLogger.info(`Linux data dir seeded successfully`, 'electron-backend', true)
+}
+
 /** Packaged app: single JSON next to resources. Dev: never write here (Vite watches the repo). */
 function getPackagedSettingsPath(): string {
   return path.join(process.resourcesPath, 'settings.json')
@@ -334,9 +396,12 @@ function getDevSettingsDefaultsPath(): string {
   return path.join(__dirname, '../../external/settings-dev.json')
 }
 
-/** Writable path: packaged = resources settings; dev = userData overlay (avoids Vite reload loops). */
+/** Writable path: packaged Linux = XDG user data dir; packaged Windows/Mac = resources; dev = userData overlay. */
 function getWritableSettingsPath(): string {
   if (app.isPackaged) {
+    if (process.platform === 'linux') {
+      return path.join(linuxDataDir(), 'settings.json')
+    }
     return getPackagedSettingsPath()
   }
   return path.join(app.getPath('userData'), 'ai-playground-local-settings.json')
@@ -377,6 +442,7 @@ async function loadSettings() {
   settings = LocalSettingsSchema.parse({})
 
   if (app.isPackaged) {
+    // Load bundled defaults first
     const packagedPath = getPackagedSettingsPath()
     appLogger.info(`loading packaged settings from ${packagedPath}`, 'electron-backend')
     if (fs.existsSync(packagedPath)) {
@@ -385,6 +451,19 @@ async function loadSettings() {
         settings = LocalSettingsSchema.parse({ ...settings, ...raw })
       } catch (e) {
         appLogger.error(`failed to load settings: ${e}`, 'electron-backend')
+      }
+    }
+    // On Linux, overlay user-written settings on top of bundled defaults
+    if (process.platform === 'linux') {
+      const userSettingsPath = getWritableSettingsPath()
+      appLogger.info(`loading Linux user settings overlay from ${userSettingsPath}`, 'electron-backend')
+      if (fs.existsSync(userSettingsPath)) {
+        try {
+          const raw = JSON.parse(fs.readFileSync(userSettingsPath, { encoding: 'utf8' }))
+          settings = LocalSettingsSchema.parse({ ...settings, ...raw })
+        } catch (e) {
+          appLogger.error(`failed to load Linux user settings overlay: ${e}`, 'electron-backend')
+        }
       }
     }
   } else {
@@ -438,9 +517,15 @@ async function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
+      // On Linux, the renderer seccomp sandbox (enabled by default in Electron 20+)
+      // kills the renderer with SIGTRAP (exit 133) on kernels/distros that block
+      // certain syscalls. Setting sandbox:false disables the OS-level seccomp
+      // sandbox while keeping contextIsolation (the JS security boundary) intact.
+      sandbox: process.platform !== 'linux',
     },
   })
   win.webContents.on('did-finish-load', () => {
+    appLogger.info('did-finish-load', 'electron-backend', true)
     setTimeout(() => {
       appLogger.onWebcontentReady(win!.webContents)
     }, 100)
@@ -471,10 +556,35 @@ async function createWindow() {
     }, 500)
   })
 
+  // Pipe renderer console messages (warnings + errors) to the app log file.
+  // This is the only way to see renderer JS errors on Linux without DevTools open.
+  win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    const text = `renderer: [L${level}] ${message} (${sourceId}:${line})`
+    if (level >= 2) {
+      appLogger.error(text, 'renderer', true)
+    } else {
+      appLogger.info(text, 'renderer')
+    }
+  })
+
+  // Alert when the renderer process crashes outright (OOM, unhandled C++ exception, etc.)
+  win.webContents.on('render-process-gone', (_event, details) => {
+    appLogger.error(
+      `render-process-gone: reason=${details.reason} exitCode=${details.exitCode}`,
+      'electron-backend',
+      true,
+    )
+    dialog.showErrorBox(
+      'AI Playground — renderer crashed',
+      `The renderer process exited unexpectedly.\nReason: ${details.reason} (exit ${details.exitCode})\n\nCheck logs at:\n${app.getPath('userData')}`,
+    )
+  })
+
   const session = win.webContents.session
 
-  if (!app.isPackaged || settings.debug) {
-    //Open devTool if the app is not packaged
+  if (!app.isPackaged || settings.debug || process.platform === 'linux') {
+    // Always open DevTools on Linux (packaged or not) to allow diagnosing white-screen issues.
+    // DevTools opens as a detached window and shows renderer console errors immediately.
     win.webContents.openDevTools({ mode: 'detach', activate: true })
   }
 
@@ -532,11 +642,25 @@ async function createWindow() {
     }
   })
 
+  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    appLogger.error(
+      `did-fail-load: code=${errorCode} desc="${errorDescription}" url="${validatedURL}"`,
+      'electron-backend',
+      true,
+    )
+    dialog.showErrorBox(
+      'AI Playground — failed to load UI',
+      `Error ${errorCode}: ${errorDescription}\nURL: ${validatedURL}\n\nCheck logs at:\n${app.getPath('userData')}`,
+    )
+  })
+
   if (VITE_DEV_SERVER_URL) {
     await win.loadURL(VITE_DEV_SERVER_URL)
     appLogger.info('load url:' + VITE_DEV_SERVER_URL, 'electron-backend')
   } else {
-    await win.loadFile(path.join(process.env.DIST, 'index.html'))
+    const indexPath = path.join(process.env.DIST, 'index.html')
+    appLogger.info(`loadFile: ${indexPath}`, 'electron-backend', true)
+    await win.loadFile(indexPath)
   }
 
   // Make all links open with the browser, not with the application
@@ -629,6 +753,7 @@ function handleUtilityFunction<T, R>(
 }
 
 app.on('quit', async () => {
+  globalShortcut.unregisterAll()
   await stopAllMcpServers()
   if (singleInstanceLock) {
     app.releaseSingleInstanceLock()
@@ -645,7 +770,7 @@ async function shutdownServicesAndQuit() {
 
 // Quit when all windows are closed, except on macOS.
 // - macOS: apps stay active until Cmd+Q (standard macOS behavior).
-// - Linux/Windows: close window => stop services and quit app (parity behavior).
+// - Linux/Windows: close window => stop services and quit app.
 app.on('window-all-closed', async () => {
   if (process.platform !== 'darwin') {
     await shutdownServicesAndQuit()
@@ -1808,11 +1933,14 @@ app.whenReady().then(async () => {
     })
     app.exit()
   } else {
+    await seedLinuxDataDir()
     const settings = await loadSettings()
 
     const modelsDir = path.resolve(
       app.isPackaged
-        ? path.join(process.resourcesPath, 'models')
+        ? process.platform === 'linux'
+          ? path.join(linuxDataDir(), 'models')
+          : path.join(process.resourcesPath, 'models')
         : path.join(__dirname, '../../../models'),
     )
     // Start temp-folder cleanup without blocking application startup
@@ -1856,6 +1984,13 @@ app.whenReady().then(async () => {
     const window = await createWindow()
     await initServiceRegistry(window, settings)
     spawnLangchainUtilityProcess()
+
+    // F12 opens DevTools — uses module-level `win` directly because
+    // BrowserWindow.getFocusedWindow() returns null on Linux when the window
+    // lacks OS keyboard focus (common with GNOME).
+    globalShortcut.register('F12', () => {
+      win?.webContents.openDevTools({ mode: 'detach', activate: true })
+    })
 
     // On Linux: handle SIGINT (Ctrl+C) and SIGTERM for clean shutdown,
     // including headless/non-interactive runs.

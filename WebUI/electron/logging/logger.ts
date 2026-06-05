@@ -6,8 +6,13 @@ import { app } from 'electron'
 class Logger {
   webContents: WebContents | null = null
   private pathToLogFiles: string = path.resolve(
-    app.isPackaged ? process.resourcesPath : path.join(__dirname, '../../external/'),
+    // In packaged builds, write logs to the user's app data directory
+    // (e.g. ~/.config/ai-playground on Linux) which is always writable.
+    // process.resourcesPath is root-owned in a deb install and logs would be silently dropped.
+    app.isPackaged ? app.getPath('userData') : path.join(__dirname, '../../external/'),
   )
+  // Rotate log file when it exceeds this size (5 MB per session is plenty for diagnostics).
+  private readonly MAX_LOG_SIZE_BYTES = 5 * 1024 * 1024
   private startupMessageCache: {
     message: string
     source: string
@@ -76,14 +81,31 @@ class Logger {
 
   logMessageToFile(message: string, source: string) {
     const fileName = `${this.getDebugFileName()}.log`
+    const filePath = path.join(this.pathToLogFiles, fileName)
     const currentDate = new Date()
     const hours = currentDate.getHours().toString().padStart(2, '0')
     const minutes = currentDate.getMinutes().toString().padStart(2, '0')
     const seconds = currentDate.getSeconds().toString().padStart(2, '0')
-
     const formattedTime = `${hours}:${minutes}:${seconds}`
     const logMessage = `${formattedTime}|${source}|${message}`
-    fs.appendFileSync(path.join(this.pathToLogFiles, fileName), logMessage + '\r\n')
+
+    try {
+      // Rotate when the daily log file exceeds the size limit.
+      let fileSize = 0
+      try {
+        fileSize = fs.statSync(filePath).size
+      } catch {
+        // File doesn't exist yet — that's fine.
+      }
+      if (fileSize > this.MAX_LOG_SIZE_BYTES) {
+        // Truncate rather than append: preserve the path so the user can still find the file.
+        fs.writeFileSync(filePath, `--- rotated ${new Date().toISOString()} (previous content exceeded size limit) ---\r\n${logMessage}\r\n`)
+        return
+      }
+      fs.appendFileSync(filePath, logMessage + '\r\n')
+    } catch {
+      // Swallow write errors (e.g. ENOSPC) so logging never crashes the app.
+    }
   }
 
   getDebugFileName(): string {

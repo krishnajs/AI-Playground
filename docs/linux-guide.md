@@ -1,221 +1,348 @@
-# Running AI Playground on Linux
+# Intel AI Playground — Linux Guide
 
-Quick guide to run Intel AI Playground on Linux with full GPU acceleration.
+## Overview
 
-## Quick Start
+Intel AI Playground runs locally on Ubuntu Linux with full Intel GPU acceleration. It supports
+ALL Intel GPU hardware: Meteor Lake (MTL), Arrow Lake (ARL), Panther Lake (PTL), Lunar Lake (LNL),
+Battlemage (BMG), Wildcat Lake (WCL), and Alchemist (ACM).
+
+---
+
+## Installation (.deb Package)
+
+The `.deb` package handles all dependencies automatically.
+
+### System Requirements
+
+| Requirement | Minimum | Recommended |
+|-------------|---------|-------------|
+| OS | Ubuntu 24.04 LTS | Ubuntu 24.04 LTS |
+| GPU | Any Intel GPU (MTL/ARL/PTL/LNL/BMG/WCL/ACM) | Intel Arc or Core Ultra iGPU |
+| Disk space | 15 GB free | 50 GB free (for models) |
+| RAM | 16 GB | 32 GB+ |
+| Network | Required for first run (downloads backends) | 100 Mbit+ |
+
+### Install
+
+```bash
+sudo dpkg -i "AI Playground-3.1.0-alpha.deb"
+sudo apt-get install -f    # installs all dependencies automatically
+```
+
+The `.deb` package:
+- Installs the Electron app to `/opt/AI Playground/`
+- Installs all required system libraries and build tools via `apt` dependencies
+- Conditionally installs Intel GPU runtime (Level Zero, OpenCL ICD) if an Intel GPU is detected
+- Sets up desktop integration (application menu icon)
+
+> **Why `dpkg -i` instead of `apt install ./…`?**
+> `apt` routes local installs through the `_apt` user sandbox, which cannot read files in
+> `/home/`. Use `dpkg -i` to install directly from disk without sandboxing issues.
+
+### First Launch
+
+```bash
+/opt/AI\ Playground/ai-playground
+```
+
+On first launch, the app:
+1. Creates `~/.local/share/ai-playground/` (user data directory)
+2. Copies backend scripts from `/opt/AI Playground/resources/`
+3. Installs Python environments (venvs) for each backend (~7-12 GB)
+4. Downloads required binaries (llama-server, OVMS)
+
+**Expected first-run time:** 5-15 minutes.
+
+### Upgrade
+
+```bash
+sudo dpkg -i "AI Playground-<new-version>.deb"
+sudo apt-get install -f
+```
+
+Upgrades preserve user data (models, settings) in `~/.local/share/ai-playground/`.
+
+### Remove
+
+```bash
+sudo apt remove ai-playground
+```
+
+User data in `~/.local/share/ai-playground/` is preserved. To fully remove:
+```bash
+rm -rf ~/.local/share/ai-playground ~/.config/ai-playground
+```
+
+---
+
+## Development Setup
+
+For contributors working on the source code:
 
 ### Prerequisites
 
-- Ubuntu 24.04 LTS or newer
-- Intel Core Ultra with integrated GPU
-- Node.js 22+
-- Python 3.12+
+- Node.js 22+ (via [nvm](https://github.com/nvm-sh/nvm))
+- System packages (installed automatically by .deb, but needed for dev):
+  ```bash
+  sudo apt install -y \
+    git curl unzip pciutils \
+    build-essential pkg-config meson ninja-build cmake \
+    python3 python3-dev \
+    libcairo2-dev libgirepository1.0-dev libglib2.0-dev \
+    libjpeg-dev zlib1g-dev libpng-dev libssl-dev libgl1 \
+    ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswscale-dev \
+    xvfb libvulkan1 mesa-vulkan-drivers
+  ```
 
-Install required packages:
-```bash
-sudo apt update
-sudo apt install -y \
-  git curl unzip jq pciutils tar gzip p7zip-full \
-  build-essential pkg-config meson ninja-build cmake \
-  python3 python3-pip python3-venv python3-dev \
-  libcairo2-dev libgirepository1.0-dev libglib2.0-dev \
-  libjpeg-dev zlib1g-dev libpng-dev libtiff-dev libwebp-dev \
-  ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswscale-dev \
-  libssl-dev libgl1
-```
+### Clone & Run
 
-> **Why so many `-dev` packages?**  uv builds several Python wheels from source on first run
-> (`pycairo`, `llvmlite`, `numpy`, image/video libs). They each need the matching system
-> headers (`pkg-config cairo`, `Python.h`, libav*, etc.). `start-ui.sh` runs a preflight
-> check and tells you exactly which apt packages are missing before the install starts —
-> install them in one go and the rest of the bring-up is unattended.
-
-### Installation
-
-**Using the Convenience Script (Recommended):**
-
-1. **Clone and enter the repository:**
 ```bash
 git clone <repository-url>
-cd AI-Playground
-```
-
-2. **Run the startup script:**
-```bash
-chmod +x start-ui.sh
-./start-ui.sh
-```
-
-The application will start at **http://localhost:25413**
-
-**Manual Installation:**
-
-1. **Clone and enter the repository:**
-```bash
-git clone <repository-url>
-cd AI-Playground
-```
-
-2. **Install Node.js dependencies:**
-```bash
-cd WebUI
+cd AI-Playground/WebUI
 npm install
-```
-
-3. **Download external resources:**
-```bash
 npm run fetch-external-resources
-```
-
-4. **Launch the application:**
-```bash
 npm run dev
 ```
+
+For headless environments (SSH, no display):
+```bash
+npm run dev:headless
+```
+
+The application opens at **http://localhost:25413**
+
+### Build the .deb
+
+```bash
+sudo apt install -y binutils    # needed for 'ar' tool
+cd WebUI
+npm run build:linux
+```
+
+Output: `build/electron/AI Playground-<version>.deb`
 
 ---
 
 ## Proxy Configuration
 
-If you're behind a corporate proxy, configure npm before installation:
+### For .deb Runtime
+
+Set proxy environment variables before launching the app:
 
 ```bash
-npm config set proxy http://proxy-dmz.intel.com:911
-npm config set https-proxy http://proxy-dmz.intel.com:912
-npm config set strict-ssl false
+export HTTPS_PROXY=http://your-proxy:port
+export HTTP_PROXY=http://your-proxy:port
+/opt/AI\ Playground/ai-playground
 ```
+
+For persistent configuration, add to `/etc/environment` or `~/.bashrc`.
+
+The app automatically passes proxy settings to:
+- Python package downloads (uv/pip)
+- HuggingFace model downloads
+- Backend-version checks
+
+### For Development (npm install)
+
+```bash
+export HTTPS_PROXY=http://your-proxy:port
+export ELECTRON_GET_USE_PROXY=true    # required for Electron binary download
+npm install
+```
+
+---
+
+## Disk Space Management
+
+### Understanding Storage Usage
+
+| Location | Contents | Size |
+|----------|----------|------|
+| `/opt/AI Playground/` | App binary + resources (read-only) | ~500 MB |
+| `~/.local/share/ai-playground/` | Python venvs, backends, models, cache | 7-60+ GB |
+| `~/.config/ai-playground/` | Logs, settings | < 50 MB |
+| `/dev/shm/aipg-tmp/` | Temporary build files (cleaned after install) | 0-5 GB during install |
+
+### Monitoring Usage
+
+```bash
+du -sh ~/.local/share/ai-playground/
+du -sh ~/.local/share/ai-playground/.uv-cache/
+du -sh ~/.local/share/ai-playground/*/. venv/ 2>/dev/null
+```
+
+### Reclaiming Space
+
+```bash
+# Clear UV package cache (safe — packages are already installed in venvs)
+rm -rf ~/.local/share/ai-playground/.uv-cache
+
+# Remove all backend venvs (will be reinstalled on next app launch)
+rm -rf ~/.local/share/ai-playground/service/.venv
+rm -rf ~/.local/share/ai-playground/OpenVINO/.venv
+rm -rf ~/.local/share/ai-playground/ComfyUI/.venv
+
+# Remove downloaded models
+rm -rf ~/.local/share/ai-playground/models/
+```
+
+### Using a Different Partition
+
+If your root filesystem is small, point data to a larger partition:
+
+```bash
+export XDG_DATA_HOME=/mnt/large-disk/.local/share
+/opt/AI\ Playground/ai-playground
+```
+
+Or create a symlink:
+```bash
+mkdir -p /mnt/large-disk/ai-playground
+ln -s /mnt/large-disk/ai-playground ~/.local/share/ai-playground
+```
+
+---
+
+## Headless / Remote Access
+
+### SSH Tunnel (Recommended)
+
+```bash
+ssh -L 25413:localhost:25413 user@remote-host
+```
+
+Then open **http://localhost:25413** in your local browser.
+
+> Use `http://`, not `https://`. The server speaks plain HTTP.
+
+### Headless Mode (No Display)
+
+For servers without X11/Wayland:
+
+```bash
+xvfb-run /opt/AI\ Playground/ai-playground
+```
+
+Or for development:
+```bash
+npm run dev:headless
+```
+
+### Remote Console (KVM / VNC / iDRAC)
+
+Open the browser **inside** the remote desktop session and visit `http://localhost:25413`.
 
 ---
 
 ## Troubleshooting
 
-### npm install fails with timeout
-Configure proxy settings (see Proxy Configuration section above).
+### Backend installation fails with ENOSPC (no space left on device)
 
-### "UV executable not found"
+**Cause:** Root filesystem is full. Backend installation (Python packages) needs ~10-15 GB free.
+
+**Fix:**
+```bash
+# Check available space
+df -h /
+
+# Option 1: Free disk space
+sudo apt autoremove && sudo apt clean
+sudo du -sh /var/cache/apt /var/log /tmp | sort -rh
+
+# Option 2: Use a larger partition for app data
+export XDG_DATA_HOME=/mnt/large-disk/.local/share
+/opt/AI\ Playground/ai-playground
+
+# Option 3: Clear previous failed installation
+rm -rf ~/.local/share/ai-playground/.uv-cache
+rm -rf ~/.local/share/ai-playground/*/.venv
+```
+
+> The app uses `/dev/shm/` (RAM-backed) for temporary build files during installation,
+> so the root filesystem only needs space for the final installed packages.
+
+### White screen after launch
+
+**Cause:** Intel GPU runtime not installed or GPU driver issue.
+
+**Fix:**
+```bash
+# Check if Level Zero is installed
+dpkg -s intel-level-zero-gpu 2>/dev/null || echo "Not installed"
+
+# Reinstall GPU runtime
+sudo apt install intel-level-zero-gpu intel-opencl-icd level-zero
+```
+
+### "UV executable not found" (dev mode)
+
 ```bash
 cd WebUI
 npm run fetch-external-resources
 ```
 
-### Port 25413 connection refused
-Check if the dev server is running:
+### Port 25413 already in use
+
 ```bash
-netstat -tlnp | grep 25413
+# Find what's using the port
+sudo lsof -i :25413
+# Kill it
+sudo kill $(sudo lsof -t -i :25413)
+```
+
+### ComfyUI fails with ModuleNotFoundError
+
+```bash
+# Stop the app
+pkill -f "ai-playground\|AI Playground" || true
+pkill -f "python" || true
+
+# Wipe broken venv
+rm -rf ~/.local/share/ai-playground/ComfyUI/.venv
+
+# Relaunch — it will reinstall
+/opt/AI\ Playground/ai-playground
 ```
 
 ### Check application logs
+
 ```bash
-tail -f /tmp/app-log.txt
+# View today's log
+cat ~/.config/ai-playground/aip-$(date +%Y-%m-%d).log
+
+# Follow logs in real-time
+tail -f ~/.config/ai-playground/aip-*.log
 ```
 
-### Verify AI Backend is running
-```bash
-curl http://127.0.0.1:59000/healthy
-# Should return: {"health":"OK"}
-```
+### Verify backends are running
 
-### Verify ComfyUI GPU detection
 ```bash
-# Check ComfyUI is using XPU
-curl http://127.0.0.1:49000/system_stats
-# Should show: "type": "xpu" and GPU device info
-```
-
-### Check GPU memory allocation
-```bash
-# View ComfyUI memory settings
-ps aux | grep ComfyUI
-# Should show: --reserve-vram 2.0 (without --lowvram on Linux)
+curl http://127.0.0.1:59000/healthy           # AI Backend
+curl http://127.0.0.1:49000/system_stats      # ComfyUI
 ```
 
 ---
 
-## Remote Access (SSH)
+## Supported Hardware
 
-If running on a remote Linux server, create an SSH tunnel:
-```bash
-ssh -L 25413:localhost:25413 -L 59000:localhost:59000 user@remote-host
-```
+| Architecture | Type | Device IDs | Status |
+|-------------|------|-----------|--------|
+| **BMG** (Battlemage) | Discrete GPU | 0xe202, 0xe20b, 0xe20c, 0xe20d, 0xe212 | Fully supported |
+| **ACM** (Alchemist) | Discrete GPU | 0x4f80-0x4f87, 0x5690-0x5697, 0x56a0-0x56c2 | Fully supported |
+| **PTL** (Panther Lake) | Integrated GPU | 0xb08f, 0xb090, 0xb0a0 | Fully supported |
+| **ARL** (Arrow Lake) | Integrated GPU | 0x7d51, 0x7dd1 | Fully supported |
+| **LNL** (Lunar Lake) | Integrated GPU | 0x6420, 0x64a0, 0x64b0 | Fully supported |
+| **MTL** (Meteor Lake) | Integrated GPU | 0x7d40, 0x7d55, 0x7dd5, 0x7d45 | Fully supported |
+| **WCL** (Wildcat Lake) | Integrated GPU | 0xfd80, 0xfd81 | Fully supported |
 
-Then open **http://localhost:25413** in your local browser.
+### iGPU vs dGPU Behavior Differences
 
-> ⚠️ **Use `http://`, not `https://`.** The dev server speaks plain HTTP.
-> An `https://` URL will produce a blank page or `ERR_SSL_PROTOCOL_ERROR`.
-
-### Remote-console access (KVM / VNC / iDRAC / vSphere)
-
-When you connect over a remote console, your laptop's `localhost` is **not** the
-remote machine. You have two options:
-
-1. **Open the browser inside the remote desktop session you see over the KVM**
-   and visit `http://localhost:25413`. This is the simplest path.
-2. **SSH-tunnel as shown above** and use your laptop's local browser.
-
-The dev server binds to `127.0.0.1` only (see
-`WebUI/package.json → debug.env.VITE_DEV_SERVER_HOSTNAME`). Exposing it on
-`0.0.0.0` is possible but discouraged — Vite has no authentication.
-
----
-
-## Recovery: ComfyUI fails with `ModuleNotFoundError` after install
-
-Symptom in the UI:
-
-```
-=== Environment Mismatch Warning ===
-Environment mismatch detected. The virtual environment at .../ComfyUI/.venv
-exists but doesn't match the expected lockfile state.
-
-ModuleNotFoundError: No module named 'yaml'    (or torch, av, etc.)
-```
-
-Meaning: `uv sync` aborted partway through (usually a missing system header —
-see prerequisites above) leaving a half-built venv. The app detects the
-mismatch but still tries to start the backend, hence the second traceback.
-
-**Fix in one shot:**
-
-```bash
-cd <repo-root>
-# 1. stop everything
-kill $(cat /tmp/aipg-electron.pid) 2>/dev/null; pkill -f electron || true
-pkill -f "AI-Playground/.*python" || true
-# 2. install the apt prereqs from the top of this guide
-# 3. wipe the broken venv + markers
-rm -rf ComfyUI/.venv comfyui-deps/.venv
-find ComfyUI -maxdepth 3 -name '.aipg-comfyui-revision*' -delete
-[ -f ComfyUI/pyproject.toml.aipg-upstream ] && \
-  mv -f ComfyUI/pyproject.toml.aipg-upstream ComfyUI/pyproject.toml
-# 4. clear uv's failed build cache so it actually retries the build
-rm -rf ~/.cache/uv/sdists-v9/pypi/pycairo ~/.cache/uv/builds-v0
-# 5. relaunch — installer runs from a clean slate
-./start-ui.sh
-```
-
-To debug a recurring failure, run `uv sync` directly so you see the real
-error instead of the truncated UI message:
-
-```bash
-cd ComfyUI
-../build/resources/uv sync --extra "$(jq -r .variant aipg-variant.json)"
-```
-
----
-
-## Linux-Specific Behavior
-
-### Window Close Behavior
-On Linux, closing the Electron window does **NOT** stop the backend services. This allows server-like operation:
-
-- Close window → Services keep running
-- Reconnect via http://localhost:25413
-- Full shutdown: Press `Ctrl+C` in terminal or use `SIGTERM`
-
-### Process Management
-The `start-ui.sh` script automatically kills previous instances before starting:
-```bash
-./start-ui.sh  # Safe to run multiple times
-```
+| Feature | iGPU (MTL/ARL/PTL/LNL/WCL) | dGPU (BMG/ACM) |
+|---------|----------------------------|----------------|
+| Memory | Shared system RAM (up to 57 GB) | Dedicated VRAM (8-16 GB) |
+| ComfyUI flags | No `--lowvram`, `--reserve-vram 2.0` | `--lowvram`, `--reserve-vram 6.0` |
+| Level Zero config | `ZE_FLAT_DEVICE_HIERARCHY=COMPOSITE` | Standard |
+| Max model size | Limited by system RAM | Limited by VRAM |
 
 ---
 
@@ -225,18 +352,18 @@ The `start-ui.sh` script automatically kills previous instances before starting:
 ```
 MESA-INTEL: warning: Vulkan not yet supported on Intel(R) Graphics (PTL)
 ```
-**Status**: Expected and harmless. AI workloads use Level Zero/SYCL directly, not Vulkan. Only affects Electron UI rendering (uses software rasterizer instead).
+Expected and harmless. AI workloads use Level Zero/SYCL directly. UI uses software rendering.
 
 ### NVIDIA Detection
 ```
 Failed to detect NVIDIA GPUs via nvidia-smi
 ```
-**Status**: Normal on Intel GPU systems. Intel GPUs are detected via `lspci`.
+Normal on Intel GPU systems. Intel GPUs are detected via `lspci`.
 
 ---
 
 ## Additional Resources
 
-- **Technical Changes**: See `CHANGELOG_LINUX.md` at repository root for detailed implementation notes
-- **Original Proposal**: See `linux-porting-proposal.md` for the full porting plan
-- **Memory Fixes**: CHANGELOG documents XPU memory management and Level Zero configuration
+- **Technical Changes**: See `CHANGELOG_LINUX.md` for detailed implementation notes
+- **Architecture**: See `docs/arc42/arc42_doc.md` for system architecture
+- **ComfyUI UV Migration**: See `docs/comfyui-uv-migration.md`

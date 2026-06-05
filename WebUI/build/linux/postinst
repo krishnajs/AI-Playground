@@ -1,0 +1,166 @@
+#!/bin/sh
+# Intel AI Playground — post-installation script
+# Runs as root after `dpkg -i` or `apt install`.
+# Responsibilities:
+#   1. Detect Intel GPU and conditionally install Intel GPU runtime
+#      (Level Zero + OpenCL ICD) so the app works without a manual
+#      driver setup step.
+#   2. Refresh the desktop database / icon cache so the launcher
+#      icon appears immediately without a logout.
+#
+# The script is fully non-interactive (runs under dpkg with
+# stdin=/dev/null). It never aborts the install on failure — GPU
+# runtime install failures emit a warning and continue.
+
+set -e
+
+INTEL_GRAPHICS_LIST="/etc/apt/sources.list.d/intel-graphics.list"
+INTEL_GRAPHICS_GPG="/etc/apt/keyrings/intel-graphics.gpg"
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+has_pkg() {
+    dpkg -s "$1" >/dev/null 2>&1
+}
+
+check_disk_space() {
+    # Backend installations require ~15GB minimum on the user's home partition.
+    # Warn (but do not abort) if free space is below the threshold.
+    DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/ai-playground"
+    TARGET_DIR="${DATA_DIR%/*}"  # parent dir that must exist
+    [ -d "$TARGET_DIR" ] || TARGET_DIR="$HOME"
+    AVAIL_KB=$(df -P "$TARGET_DIR" 2>/dev/null | awk 'NR==2 {print $4}')
+    AVAIL_GB=$(( ${AVAIL_KB:-0} / 1048576 ))
+    MIN_GB=15
+
+    if [ "$AVAIL_GB" -lt "$MIN_GB" ]; then
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════════════════╗"
+        echo "║  AI Playground WARNING: Low disk space                              ║"
+        echo "║                                                                     ║"
+        echo "║  Available: ${AVAIL_GB} GB on $(df -P "$TARGET_DIR" | awk 'NR==2 {print $1}')"
+        echo "║  Required:  ~${MIN_GB} GB minimum (backends + Python environments) ║"
+        echo "║                                                                     ║"
+        echo "║  Backend installation will likely fail with ENOSPC.                 ║"
+        echo "║  Free disk space or set XDG_DATA_HOME to a larger partition.        ║"
+        echo "╚══════════════════════════════════════════════════════════════════════╝"
+        echo ""
+    fi
+}
+
+intel_gpu_detected() {
+    # Match friendly names (Arc, Iris, UHD, Graphics) OR Intel vendor ID [8086:] on VGA/Display controllers
+    # (newer GPUs like Panther Lake may not have friendly names in the PCI ID database yet)
+    lspci -nn 2>/dev/null | grep -Ei 'VGA|3D|Display' | grep -qi "Intel.*(Graphics|GPU|UHD|Arc|Iris)" && return 0
+    lspci -nn 2>/dev/null | grep -Ei 'VGA|3D|Display' | grep -q "\[8086:" && return 0
+    return 1
+}
+
+add_intel_graphics_repo() {
+    if [ -f "$INTEL_GRAPHICS_LIST" ]; then
+        return 0
+    fi
+
+    echo "AI Playground: adding Intel graphics APT repository..."
+    mkdir -p /etc/apt/keyrings
+
+    # Download GPG key (curl is in Depends so it will be present)
+    if ! curl -fsSL \
+        "https://repositories.intel.com/gpu/intel-graphics.key" \
+        | gpg --dearmor -o "$INTEL_GRAPHICS_GPG" 2>/dev/null; then
+        echo "AI Playground WARNING: could not fetch Intel graphics key — skipping GPU runtime install."
+        return 1
+    fi
+
+    # Detect Ubuntu codename (noble=24.04, jammy=22.04, etc.)
+    DISTRO_CODENAME=""
+    if [ -f /etc/os-release ]; then
+        # shellcheck disable=SC1091
+        DISTRO_CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME:-}")
+    fi
+    if [ -z "$DISTRO_CODENAME" ]; then
+        echo "AI Playground WARNING: could not detect OS codename — skipping GPU runtime install."
+        return 1
+    fi
+
+    printf 'deb [arch=amd64 signed-by=%s] https://repositories.intel.com/gpu/ubuntu %s unified\n' \
+        "$INTEL_GRAPHICS_GPG" "$DISTRO_CODENAME" \
+        > "$INTEL_GRAPHICS_LIST"
+
+    # Refresh only the new repo to keep install time short
+    apt-get update -q \
+        -o Dir::Etc::sourcelist="$INTEL_GRAPHICS_LIST" \
+        -o Dir::Etc::sourceparts="-" \
+        -o APT::Get::List-Cleanup="0" 2>/dev/null || true
+
+    return 0
+}
+
+install_intel_gpu_runtime() {
+    # Already present?
+    if has_pkg "intel-level-zero-gpu" && has_pkg "intel-opencl-icd"; then
+        echo "AI Playground: Intel GPU runtime already installed."
+        return 0
+    fi
+
+    echo "AI Playground: installing Intel GPU runtime (Level Zero + OpenCL)..."
+
+    if ! add_intel_graphics_repo; then
+        return 0  # warning already printed; don't abort install
+    fi
+
+    # Install — errors are non-fatal (app still works in CPU/Vulkan mode)
+    apt-get install -y --no-install-recommends \
+        intel-opencl-icd \
+        intel-level-zero-gpu \
+        level-zero \
+        intel-media-va-driver-non-free \
+        libze-intel-gpu1 \
+        2>/dev/null \
+        || echo "AI Playground WARNING: Intel GPU runtime install failed. GPU acceleration may be unavailable."
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+case "$1" in
+    configure)
+        # Disk space check — warn if insufficient for backend venvs
+        check_disk_space
+
+        # Only attempt GPU runtime install when an Intel GPU is visible
+        if intel_gpu_detected; then
+            install_intel_gpu_runtime || true
+        else
+            echo "AI Playground: no Intel GPU detected — GPU runtime install skipped. The app will run in CPU mode."
+        fi
+
+        # Set chrome-sandbox permissions so Electron's renderer sandbox can work.
+        # (Our custom postinst replaces electron-builder's default which would have
+        # done this. --no-sandbox in main.ts is the fallback, but setuid is preferred.)
+        CHROME_SANDBOX="/opt/AI Playground/chrome-sandbox"
+        if [ -f "$CHROME_SANDBOX" ]; then
+            chown root "$CHROME_SANDBOX" 2>/dev/null || true
+            chmod 4755 "$CHROME_SANDBOX" 2>/dev/null || true
+        fi
+
+        # Refresh desktop integration (icon + MIME)
+        if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database /usr/share/applications/ 2>/dev/null || true
+        fi
+        if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -f /usr/share/icons/hicolor/ 2>/dev/null || true
+        fi
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        echo "postinst called with unknown argument: $1" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

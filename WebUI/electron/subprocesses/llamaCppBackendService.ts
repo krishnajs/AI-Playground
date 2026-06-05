@@ -10,6 +10,7 @@ import { vulkanDeviceSelectorEnv } from './deviceDetection.ts'
 import { LocalSettings } from '../main.ts'
 import getPort, { portNumbers } from 'get-port'
 import { binary, extract } from './tools.ts'
+import { linuxDataDir } from '../util.ts'
 
 const execAsync = promisify(exec)
 
@@ -35,7 +36,11 @@ export class LlamaCppBackendService implements ApiService {
   readonly settings: LocalSettings
 
   // Service directories
-  readonly baseDir = app.isPackaged ? process.resourcesPath : path.join(__dirname, '../../../')
+  readonly baseDir = app.isPackaged
+    ? process.platform === 'linux'
+      ? linuxDataDir()
+      : process.resourcesPath
+    : path.join(__dirname, '../../../')
   readonly serviceDir: string
   readonly llamaCppDir: string
   readonly llamaCppExePath: string

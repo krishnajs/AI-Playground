@@ -5,7 +5,9 @@ describe('deviceArch', () => {
   describe('getDeviceArch', () => {
     it('should return the correct architecture for known device IDs', () => {
       expect(getDeviceArch(0x4f80)).toBe('acm')
+      expect(getDeviceArch(0xb08f)).toBe('ptl')
       expect(getDeviceArch(0x7d40)).toBe('mtl')
+      expect(getDeviceArch(0x7d51)).toBe('arl_h')
       expect(getDeviceArch(0xe202)).toBe('bmg')
       expect(getDeviceArch(0xfd80)).toBe('wcl')
       expect(getDeviceArch(0xfd81)).toBe('wcl')
@@ -21,6 +23,7 @@ describe('deviceArch', () => {
     it('should return the correct priority for each architecture', () => {
       expect(getArchPriority('bmg')).toBe(5)
       expect(getArchPriority('acm')).toBe(4)
+      expect(getArchPriority('ptl')).toBe(3)
       expect(getArchPriority('arl_h')).toBe(3)
       expect(getArchPriority('wcl')).toBe(2)
       expect(getArchPriority('lnl')).toBe(2)
