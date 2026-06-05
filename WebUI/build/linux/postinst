@@ -51,8 +51,11 @@ check_disk_space() {
 }
 
 intel_gpu_detected() {
-    lspci 2>/dev/null | grep -qi \
-        "Intel.*Graphics\|Intel.*GPU\|Intel.*UHD\|Intel.*Arc\|Intel.*Iris"
+    # Match friendly names (Arc, Iris, UHD, Graphics) OR Intel vendor ID [8086:] on VGA/Display controllers
+    # (newer GPUs like Panther Lake may not have friendly names in the PCI ID database yet)
+    lspci -nn 2>/dev/null | grep -Ei 'VGA|3D|Display' | grep -qi "Intel.*(Graphics|GPU|UHD|Arc|Iris)" && return 0
+    lspci -nn 2>/dev/null | grep -Ei 'VGA|3D|Display' | grep -q "\[8086:" && return 0
+    return 1
 }
 
 add_intel_graphics_repo() {
@@ -132,7 +135,7 @@ case "$1" in
         if intel_gpu_detected; then
             install_intel_gpu_runtime || true
         else
-            echo "AI Playground: no Intel GPU detected — skipping GPU runtime install."
+            echo "AI Playground: no Intel GPU detected — GPU runtime install skipped. The app will run in CPU mode."
         fi
 
         # Set chrome-sandbox permissions so Electron's renderer sandbox can work.
